@@ -1,4 +1,4 @@
-# hopr-utils
+# hopr-utilities
 
 Shared utility crates for HOPR: async runtime, network types, parallelisation, statistics, platform, and testing helpers
 

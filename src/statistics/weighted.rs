@@ -10,7 +10,7 @@ use rand::RngExt;
 /// # Examples
 ///
 /// ```rust
-/// use hopr_utils::statistics::WeightedCollection;
+/// use hopr_utilities::statistics::WeightedCollection;
 ///
 /// let wc = WeightedCollection::from(vec![("rare", 0.1), ("common", 10.0)]);
 /// let picked = wc.pick_one().expect("non-empty collection");
