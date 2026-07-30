@@ -5,7 +5,7 @@ description  = "Shared utility crates for HOPR: async runtime, network types, pa
 edition      = "2024"
 homepage     = "https://hoprnet.org/"
 include      = ["Cargo.toml", "LICENSE", "README.md", "src/**/*.rs"]
-keywords     = ["hopr", "async", "utilities"]
+keywords     = ["async", "hopr", "utilities"]
 license      = "GPL-3.0-only"
 name         = "hopr-utilities"
 readme       = "README.md"
@@ -20,16 +20,17 @@ crate-type = ["rlib"]
 default = []
 
 # runtime module (from hopr-async-runtime) — always compiled, feature gates optional deps only
-runtime-tokio = ["dep:tokio", "dep:tracing"]
 async-lock    = ["dep:async-lock"]
+runtime-tokio = ["dep:tokio", "dep:tracing"]
 
 # network-types module (from hopr-network-types)
 network-types = [
-  "dep:crossfire",
   "dep:arrayvec",
+  "dep:crossfire",
   "dep:flume",
   "dep:futures-time",
   "dep:hickory-resolver",
+  "dep:lazy_static",
   "dep:libp2p-identity",
   "dep:multiaddr",
   "dep:pin-project",
@@ -37,44 +38,43 @@ network-types = [
   "dep:strum",
   "dep:thiserror",
   "dep:tracing",
-  "dep:lazy_static",
   "hopr-types/crypto",
 ]
-serde                       = ["dep:serde", "dep:serde_bytes", "hopr-types/serde"]
-network-types-serde         = ["network-types", "serde", "libp2p-identity/serde"]
-network-types-capture       = ["network-types", "dep:pcap-file"]
+network-types-capture = ["dep:pcap-file", "network-types"]
 network-types-runtime-tokio = [
-  "network-types",
-  "runtime-tokio",
   "dep:tokio-util",
   "hickory-resolver/tokio",
+  "network-types",
+  "runtime-tokio",
 ]
-telemetry               = ["hopr-types/telemetry"]
+network-types-serde = ["libp2p-identity/serde", "network-types", "serde"]
 network-types-telemetry = ["network-types", "telemetry"]
+serde = ["dep:serde", "dep:serde_bytes", "hopr-types/serde"]
+telemetry = ["hopr-types/telemetry"]
 
 # parallelize module (from hopr-parallelize)
-parallelize               = ["dep:thiserror", "dep:tracing", "dep:lazy_static", "dep:libc"]
-parallelize-rayon         = ["parallelize", "dep:rayon"]
+parallelize               = ["dep:lazy_static", "dep:libc", "dep:thiserror", "dep:tracing"]
+parallelize-rayon         = ["dep:rayon", "parallelize"]
 parallelize-runtime-tokio = ["parallelize", "runtime-tokio"]
 parallelize-telemetry     = ["parallelize", "telemetry"]
 
 # statistics module (from hopr-statistics)
 statistics-types          = []
-statistics-types-serde    = ["statistics-types", "dep:serde"]
 statistics-types-moving   = ["statistics-types"]
-statistics-types-weighted = ["statistics-types", "dep:rand"]
+statistics-types-serde    = ["dep:serde", "statistics-types"]
+statistics-types-weighted = ["dep:rand", "statistics-types"]
 
 # platform module (from hopr-platform)
 platform              = ["dep:thiserror"]
-platform-trace-timing = ["platform", "dep:tracing"]
+platform-trace-timing = ["dep:tracing", "platform"]
 
 [dependencies]
 # runtime (always-on baseline)
-auto_impl  = { workspace = true }
 async-lock = { workspace = true, optional = true }
-indexmap   = { workspace = true }
+auto_impl  = { workspace = true }
 futures    = { workspace = true }
-tokio      = { workspace = true, optional = true, features = ["time", "sync"] }
+indexmap   = { workspace = true }
+tokio      = { workspace = true, optional = true, features = ["sync", "time"] }
 
 crossfire = { workspace = true, optional = true }
 
@@ -85,11 +85,11 @@ futures-time     = { workspace = true, optional = true }
 hickory-resolver = { workspace = true, optional = true }
 libp2p-identity  = { workspace = true, optional = true }
 multiaddr        = { workspace = true, optional = true }
-pin-project      = { workspace = true, optional = true }
 pcap-file        = { workspace = true, optional = true }
+pin-project      = { workspace = true, optional = true }
 socket2          = { workspace = true, features = ["all"], optional = true }
 strum            = { workspace = true, optional = true }
-tokio-util       = { workspace = true, optional = true, features = ["net", "io"] }
+tokio-util       = { workspace = true, optional = true, features = ["io", "net"] }
 
 # network-types-serde
 serde       = { workspace = true, optional = true }
@@ -119,8 +119,8 @@ anyhow        = { workspace = true }
 assertables   = { workspace = true }
 parameterized = { workspace = true }
 serial_test   = { workspace = true }
-tokio         = { workspace = true, features = ["rt", "macros", "time"] }
 test-log      = { workspace = true }
+tokio         = { workspace = true, features = ["macros", "rt", "time"] }
 
 [package.metadata.cargo-shear]
 ignored = ["serde_bytes"]
@@ -133,45 +133,45 @@ resolver = "3"
 
 [workspace.dependencies]
 # --- external crates ---
-anyhow        = "1.0.103"
-arrayvec      = "0.7.7"
-assertables   = "10.1.0"
-async-lock    = "3.4.2"
-auto_impl     = "1.3.0"
-crossfire     = { version = "3.1.18", default-features = false }
-flume         = { version = "0.12.0", default-features = false, features = ["async"] }
-futures       = { version = "0.3.32", default-features = false, features = [
-  "std",
+anyhow = "1.0.103"
+arrayvec = "0.7.7"
+assertables = "10.1.0"
+async-lock = "3.4.2"
+auto_impl = "1.3.0"
+crossfire = { version = "3.1.18", default-features = false }
+flume = { version = "0.12.0", default-features = false, features = ["async"] }
+futures = { version = "0.3.32", default-features = false, features = [
   "async-await",
+  "std",
 ] }
-futures-time     = "3.1.0"
+futures-time = "3.1.0"
 hickory-resolver = { version = "0.26.1", default-features = false, features = [
   "system-config",
 ] }
-indexmap        = "2.14.0"
-lazy_static     = "1.5.0"
-libc            = "0.2"
+indexmap = "2.14.0"
+lazy_static = "1.5.0"
+libc = "0.2"
 libp2p-identity = { version = "0.2.14", features = [
-  "peerid",
   "ed25519",
+  "peerid",
   "rand",
 ] }
-multiaddr     = "0.18.2"
+multiaddr = "0.18.2"
 parameterized = "2.0.0"
-pcap-file     = "2.0.0"
-pin-project   = "1.1.13"
-rand          = { version = "0.10.1", features = ["thread_rng"] }
-rayon         = "1.12.0"
-serde         = { version = "1.0.228", features = ["derive"] }
-serde_bytes   = "0.11.19"
-serial_test   = "3.5.0"
-socket2       = "0.6.4"
-strum         = { version = "0.28.0", features = ["derive"] }
-test-log      = { version = "0.2.21", features = ["trace"] }
-thiserror     = "2.0.18"
-tokio         = { version = "1.52.3", features = [
-  "rt-multi-thread",
+pcap-file = "2.0.0"
+pin-project = "1.1.13"
+rand = { version = "0.10.1", features = ["thread_rng"] }
+rayon = "1.12.0"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_bytes = "0.11.19"
+serial_test = "3.5.0"
+socket2 = "0.6.4"
+strum = { version = "0.28.0", features = ["derive"] }
+test-log = { version = "0.2.21", features = ["trace"] }
+thiserror = "2.0.18"
+tokio = { version = "1.52.3", features = [
   "macros",
+  "rt-multi-thread",
   "tracing",
 ] }
 tokio-util = { version = "0.7.18", default-features = false, features = [
