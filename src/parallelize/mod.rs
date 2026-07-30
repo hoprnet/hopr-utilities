@@ -9,6 +9,34 @@
 //!
 //! See the [`cpu`] module for the primary API.
 
+/// Factor of `pool_thread_count` above which the encode pool is considered to be
+/// under high pressure.
+///
+/// With 0.5: pressure is considered high once encode tasks occupy more than half
+/// the pool's thread count (as outstanding = queued + running).
+const ENCODE_PRESSURE_HIGH_FACTOR: f64 = 0.5;
+
+/// Returns `true` when the encode pool has headroom for another encode task.
+///
+/// Reads the current [`cpu::ENCODE_OUTSTANDING`] and [`cpu::pool_thread_count`]
+/// at call time, avoiding the stale-flag problem that a cached `AtomicBool`
+/// introduces.  When the `parallelize-rayon` feature is not enabled (e.g. in
+/// unit tests) this always returns `true`.
+#[inline]
+pub fn encode_pool_has_headroom() -> bool {
+    #[cfg(feature = "parallelize-rayon")]
+    {
+        let threads = cpu::pool_thread_count();
+        if threads == 0 {
+            return true; // pool not initialised yet — don't block
+        }
+        let outstanding = cpu::ENCODE_OUTSTANDING.load(std::sync::atomic::Ordering::Relaxed);
+        (outstanding as f64) < threads as f64 * ENCODE_PRESSURE_HIGH_FACTOR
+    }
+    #[cfg(not(feature = "parallelize-rayon"))]
+    true
+}
+
 /// Module for thread pool-based parallelization of CPU-heavy blocking workloads.
 ///
 /// ## Zombie Task Prevention
@@ -202,6 +230,9 @@ pub mod cpu {
     /// Current number of outstanding tasks (queued + running).
     static OUTSTANDING: AtomicUsize = AtomicUsize::new(0);
 
+    /// Thread count set by [`init_thread_pool`]; `0` means the pool has not been initialised yet.
+    static POOL_THREAD_COUNT: AtomicUsize = AtomicUsize::new(0);
+
     lazy_static::lazy_static! {
         /// Queue limit from environment. `None` means no limit.
         static ref QUEUE_LIMIT: Option<usize> = {
@@ -301,9 +332,93 @@ pub mod cpu {
             Ok(())
         });
 
+        // Store the requested thread count before build_global() so that pipeline code that
+        // calls pool_thread_count() after init can read a non-zero value immediately.
+        POOL_THREAD_COUNT.store(num_threads, Ordering::Relaxed);
         let result = builder.build_global();
         let _ = *QUEUE_LIMIT; // Initialize limit metric
         result
+    }
+
+    /// Returns the thread count the pool was initialised with, or `0` if [`init_thread_pool`]
+    /// has not been called yet.
+    #[inline]
+    pub fn pool_thread_count() -> usize {
+        POOL_THREAD_COUNT.load(Ordering::Relaxed)
+    }
+
+    /// Outstanding tasks currently attributed to the **encode** path (packet_encode + SURB generation).
+    pub static ENCODE_OUTSTANDING: AtomicUsize = AtomicUsize::new(0);
+
+    /// Outstanding tasks currently attributed to the **decode** path (packet_decode).
+    pub static DECODE_OUTSTANDING: AtomicUsize = AtomicUsize::new(0);
+
+    /// Cumulative count of packets dropped because the Rayon decode future timed out.
+    ///
+    /// Incremented unconditionally (not gated on the `telemetry` feature) so the
+    /// stress harness can read it in test builds.
+    pub static DECODE_TIMEOUT_DROPS: AtomicUsize = AtomicUsize::new(0);
+
+    /// Cumulative count of outgoing packets (data or SURB) dropped because the
+    /// Rayon encode future timed out (150 ms budget exceeded).
+    ///
+    /// A non-zero and rising count indicates the encode path is saturating the pool.
+    pub static ENCODE_TIMEOUT_DROPS: AtomicUsize = AtomicUsize::new(0);
+
+    /// Returns the current encode-path outstanding task count.
+    #[inline]
+    pub fn encode_outstanding_tasks() -> usize {
+        ENCODE_OUTSTANDING.load(Ordering::Relaxed)
+    }
+
+    /// Returns the current decode-path outstanding task count.
+    #[inline]
+    pub fn decode_outstanding_tasks() -> usize {
+        DECODE_OUTSTANDING.load(Ordering::Relaxed)
+    }
+
+    /// Returns the cumulative decode timeout drop count.
+    #[inline]
+    pub fn decode_timeout_drop_count() -> usize {
+        DECODE_TIMEOUT_DROPS.load(Ordering::Relaxed)
+    }
+
+    /// Returns the cumulative encode timeout drop count.
+    #[inline]
+    pub fn encode_timeout_drop_count() -> usize {
+        ENCODE_TIMEOUT_DROPS.load(Ordering::Relaxed)
+    }
+
+    /// RAII guard that decrements a tagged outstanding counter when dropped.
+    ///
+    /// Caller must increment the counter before constructing this guard.
+    struct TaggedGuard(&'static AtomicUsize);
+
+    impl Drop for TaggedGuard {
+        #[inline]
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Like [`spawn_fifo_blocking`] but also tracks the task in [`ENCODE_OUTSTANDING`].
+    pub async fn spawn_encode_blocking<R: Send + 'static>(
+        f: impl FnOnce() -> R + Send + 'static,
+        operation: &'static str,
+    ) -> Result<R, SpawnError> {
+        ENCODE_OUTSTANDING.fetch_add(1, Ordering::Relaxed);
+        let _guard = TaggedGuard(&ENCODE_OUTSTANDING);
+        spawn_fifo_blocking(f, operation).await
+    }
+
+    /// Like [`spawn_fifo_blocking`] but also tracks the task in [`DECODE_OUTSTANDING`].
+    pub async fn spawn_decode_blocking<R: Send + 'static>(
+        f: impl FnOnce() -> R + Send + 'static,
+        operation: &'static str,
+    ) -> Result<R, SpawnError> {
+        DECODE_OUTSTANDING.fetch_add(1, Ordering::Relaxed);
+        let _guard = TaggedGuard(&DECODE_OUTSTANDING);
+        spawn_fifo_blocking(f, operation).await
     }
 
     /// Builds a cancellable task closure and its receiver.
@@ -600,5 +715,25 @@ mod tests {
             after, initial,
             "Outstanding should return to initial after cancelled tasks drain"
         );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn tagged_encode_decode_spawns_track_and_release() {
+        let enc0 = cpu::encode_outstanding_tasks();
+        let dec0 = cpu::decode_outstanding_tasks();
+
+        assert_eq!(cpu::spawn_encode_blocking(|| 1, "test").await.unwrap(), 1);
+        assert_eq!(cpu::spawn_decode_blocking(|| 2, "test").await.unwrap(), 2);
+
+        // Counters return to their starting values once the tagged guards drop.
+        assert_eq!(cpu::encode_outstanding_tasks(), enc0);
+        assert_eq!(cpu::decode_outstanding_tasks(), dec0);
+
+        // Timeout-drop counters and the pool accessors are reachable.
+        let _ = cpu::encode_timeout_drop_count();
+        let _ = cpu::decode_timeout_drop_count();
+        let _ = cpu::pool_thread_count();
+        let _ = super::encode_pool_has_headroom();
     }
 }
