@@ -1,0 +1,41 @@
+[advisories]
+ignore = [
+  "RUSTSEC-2024-0388", # needs alloy update
+  "RUSTSEC-2024-0436", # needs past update in alloy
+  "RUSTSEC-2026-0173", # proc-macro-2 unmaintained, need aquamarine update
+  "RUSTSEC-2026-0220", # needs alloy update
+
+]
+informational_warnings = ["unmaintained"]
+severity_threshold = "low"
+
+[database]
+fetch = true
+path  = "~/.cargo/advisory-db"
+stale = false
+url   = "https://github.com/RustSec/advisory-db.git"
+
+[output]
+# TODO: restore `deny = ["warnings"]` once `core2` (yanked, transitive via libp2p's multihash) is resolved upstream.
+# cargo-audit has no per-package yanked ignore — see https://github.com/rustsec/rustsec/issues/1453
+deny      = ["unmaintained", "unsound"]
+format    = "terminal"                  # "terminal" (human readable report) or "json"
+quiet     = false                       # Only print information on error
+show_tree = true                        # Show inverse dependency trees along with advisories (default: true)
+
+[target]
+arch = [
+  "aarch64",
+  "x86_64",
+] # Ignore advisories for CPU architectures other than these
+os = [
+  "linux",
+  "macos",
+  "windows",
+] # Ignore advisories for operating systems other than these
+
+[yanked]
+# Disabled: `core2` 0.4.0 is yanked but hard-pinned by `multihash` 0.19.3 → `libp2p-identity` 0.2.13 (latest).
+# cargo-audit has no per-crate yanked ignore; re-enable once libp2p drops the core2 dependency.
+enabled      = false
+update_index = true  # Auto-update the crates.io index (default: true)
