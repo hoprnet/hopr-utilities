@@ -189,7 +189,7 @@ impl BlokliTestStateBuilder {
         native: XDaiBalance,
         token: HoprBalance,
     ) -> Self {
-        let max_id = self.0.accounts.keys().max().copied().unwrap_or(0);
+        let max_id = self.0.accounts.keys().max().copied().map_or(0, |id| id + 1);
         self.with_accounts(addresses.iter().enumerate().map(|(index, &chain_addr)| {
             let pseudorandom_data = Hash::create(&[chain_addr.as_ref()]);
             let ok = OffchainKeypair::from_secret(pseudorandom_data.as_ref())
