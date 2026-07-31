@@ -11,3 +11,6 @@ pub mod statistics;
 
 #[cfg(feature = "platform")]
 pub mod platform;
+
+#[cfg(feature = "testing-blokli")]
+pub mod testing;
