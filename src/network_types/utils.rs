@@ -358,6 +358,14 @@ mod tokio_utils {
 
                 // If our buffer has some data, let's write it out
                 while self.pos < self.cap {
+                    // Cooperate with the tokio task budget *per write* so the copy yields after ~128
+                    // writes, preventing starvation of other tasks (e.g. the SURB balancer) when the
+                    // writer returns many small always-ready writes under one buffer fill. The guard is
+                    // committed via `made_progress()` only after a non-zero write; a `Poll::Pending`
+                    // write drops it, restoring the reserved budget.
+                    #[cfg(all(tokio_unstable, feature = "runtime-tokio"))]
+                    let coop = std::task::ready!(tokio::task::coop::poll_proceed(cx));
+
                     let i = std::task::ready!(self.poll_write_buf(cx, reader.as_mut(), writer.as_mut()))?;
                     if i == 0 {
                         return Poll::Ready(Err(std::io::Error::new(
@@ -368,6 +376,9 @@ mod tokio_utils {
                     self.pos += i;
                     self.amt += i as u64;
                     self.need_flush = true;
+
+                    #[cfg(all(tokio_unstable, feature = "runtime-tokio"))]
+                    coop.made_progress();
                 }
 
                 // If pos larger than cap, this loop will never stop.
@@ -422,11 +433,25 @@ where
     fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<std::io::Result<usize>> {
         let mut this = self.project();
 
+        // Cooperate with the tokio task budget so the writer yields periodically.
+        // Each poll_write submits one packet to a downstream encoding pool; yielding
+        // after ~128 writes prevents monopolizing the executor thread when the sink
+        // is always-ready (e.g. a large-capacity CrossfireSink channel).
+        //
+        // Reserve the budget here but commit it (`made_progress()`) only once a packet is actually
+        // submitted; if the sink is not ready the guard is dropped, restoring the budget.
+        #[cfg(all(tokio_unstable, feature = "runtime-tokio"))]
+        let coop = std::task::ready!(tokio::task::coop::poll_proceed(cx));
+
         futures::ready!(this.0.as_mut().poll_ready(cx).map_err(Into::into))?;
         let len = buf.len().min(C);
 
         match this.0.as_mut().start_send(Box::from(&buf[..len])) {
-            Ok(()) => Poll::Ready(Ok(len)),
+            Ok(()) => {
+                #[cfg(all(tokio_unstable, feature = "runtime-tokio"))]
+                coop.made_progress();
+                Poll::Ready(Ok(len))
+            }
             Err(e) => Poll::Ready(Err(e.into())),
         }
     }
@@ -681,5 +706,102 @@ mod tests {
         assert_eq!(rx_data[1], (&data[7..]).into());
 
         Ok(())
+    }
+
+    /// Verify that `CopyBuffer::poll_copy` yields the tokio worker to the scheduler
+    /// after the cooperative budget is exhausted (~128 fill+write cycles).
+    ///
+    /// Without the `poll_proceed` gate, the canary task never runs while the copy
+    /// is in progress, so `counter` stays 0 and the assert fires.
+    #[cfg(all(tokio_unstable, feature = "runtime-tokio"))]
+    #[tokio::test(flavor = "current_thread")]
+    async fn poll_copy_yields_to_canary_under_saturated_transfer() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicU64, Ordering},
+        };
+
+        use tokio::io::AsyncWriteExt;
+
+        // 200 fill+write cycles > coop budget (~128) so poll_proceed fires at least once.
+        const BUF_SIZE: usize = 128;
+        const DATA_LEN: usize = BUF_SIZE * 200;
+
+        let counter = Arc::new(AtomicU64::new(0));
+        let counter_clone = counter.clone();
+
+        // Canary only runs when the main task yields to the scheduler.
+        let canary = tokio::spawn(async move {
+            loop {
+                counter_clone.fetch_add(1, Ordering::Relaxed);
+                tokio::task::yield_now().await;
+            }
+        });
+
+        // Pre-fill source; shut it down so copy_duplex sees EOF after DATA_LEN bytes.
+        let (mut source_write, mut source_read) = tokio::io::duplex(DATA_LEN);
+        source_write.write_all(&vec![0u8; DATA_LEN]).await.unwrap();
+        source_write.shutdown().await.unwrap();
+
+        // Sink side: shut down writes so copy_duplex's B→A direction sees EOF immediately.
+        // Keep alive so A→B writes to sink_read don't return broken-pipe.
+        let (mut sink_write, mut sink_read) = tokio::io::duplex(DATA_LEN);
+        sink_write.shutdown().await.unwrap();
+
+        // A→B copies DATA_LEN bytes (200 outer iterations); poll_proceed yields at 128.
+        copy_duplex(&mut source_read, &mut sink_read, (BUF_SIZE, BUF_SIZE))
+            .await
+            .unwrap();
+
+        canary.abort();
+
+        assert!(
+            counter.load(Ordering::Relaxed) > 0,
+            "canary must be scheduled at least once — poll_proceed in CopyBuffer::poll_copy must yield"
+        );
+    }
+
+    /// Verify that `AsyncWriteSink::poll_write` yields the tokio worker to the scheduler
+    /// after the cooperative budget is exhausted (~128 chunk writes).
+    ///
+    /// Without the `poll_proceed` gate, the canary never runs and `counter` stays 0.
+    #[cfg(all(tokio_unstable, feature = "runtime-tokio"))]
+    #[tokio::test(flavor = "current_thread")]
+    async fn async_write_sink_yields_to_canary_during_bulk_write() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicU64, Ordering},
+        };
+
+        use futures::AsyncWriteExt;
+
+        // 300 poll_write calls > coop budget (~128) so poll_proceed fires at least once.
+        const CHUNK_SIZE: usize = 32;
+        const NUM_CHUNKS: usize = 300;
+        let data = vec![0u8; CHUNK_SIZE * NUM_CHUNKS];
+
+        let counter = Arc::new(AtomicU64::new(0));
+        let counter_clone = counter.clone();
+
+        let canary = tokio::spawn(async move {
+            loop {
+                counter_clone.fetch_add(1, Ordering::Relaxed);
+                tokio::task::yield_now().await;
+            }
+        });
+
+        // Unbounded channel is always-ready; the only yield point is poll_proceed.
+        let (tx, _rx) = futures::channel::mpsc::unbounded::<Box<[u8]>>();
+        let mut writer = AsyncWriteSink::<CHUNK_SIZE, _>(tx.sink_map_err(std::io::Error::other));
+
+        // write_all calls poll_write 300 times; poll_proceed yields after 128.
+        AsyncWriteExt::write_all(&mut writer, &data).await.unwrap();
+
+        canary.abort();
+
+        assert!(
+            counter.load(Ordering::Relaxed) > 0,
+            "canary must be scheduled at least once — poll_proceed in AsyncWriteSink::poll_write must yield"
+        );
     }
 }
