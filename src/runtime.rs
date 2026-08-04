@@ -14,7 +14,6 @@ use std::{
 };
 
 pub use futures::future::AbortHandle;
-
 use futures::{FutureExt, channel::oneshot};
 
 /// Spawns a future on the configured async runtime.
