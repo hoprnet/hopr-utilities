@@ -15,6 +15,45 @@ use std::{
 
 pub use futures::future::AbortHandle;
 
+use futures::{FutureExt, channel::oneshot};
+
+/// Spawns a future on the configured async runtime.
+///
+/// Returns a pair of:
+/// - A future that resolves to `T` when the task completes.
+/// - An [`AbortHandle`] to cancel the task.
+///
+/// When the `runtime-tokio` feature is enabled, the future runs via
+/// `tokio::spawn`.  Without it the future is dropped immediately and the
+/// returned future will never resolve -- callers that depend on the output
+/// must handle this case (e.g. by treating a dropped sender as "task did
+/// not execute").
+pub fn spawn_task<F, T>(future: F) -> (impl Future<Output = T>, AbortHandle)
+where
+    F: Future<Output = T> + Send + 'static,
+    T: Send + 'static,
+{
+    let (tx, rx) = oneshot::channel();
+    let (abort_handle, abort_reg) = AbortHandle::new_pair();
+    let abortable = futures::future::Abortable::new(
+        async move {
+            let _ = tx.send(future.await);
+        },
+        abort_reg,
+    );
+
+    #[cfg(feature = "runtime-tokio")]
+    tokio::spawn(abortable);
+
+    #[cfg(not(feature = "runtime-tokio"))]
+    drop(abortable);
+
+    (
+        rx.map(|r| r.expect("spawn_task: sender dropped without value")),
+        abort_handle,
+    )
+}
+
 // Both features could be enabled during testing; therefore, we only use tokio when it's
 // exclusively enabled.
 pub mod prelude {
