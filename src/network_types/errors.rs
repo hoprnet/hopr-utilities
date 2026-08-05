@@ -1,15 +1,2 @@
-use thiserror::Error;
-
-#[derive(Error, Debug)]
-pub enum NetworkTypeError {
-    #[error("io error: {0}")]
-    IoError(#[from] std::io::Error),
-
-    #[error("the target is sealed")]
-    SealedTarget,
-
-    #[error("{0}")]
-    Other(String),
-}
-
-pub type Result<T> = std::result::Result<T, NetworkTypeError>;
+// The network-type errors now live in `hopr-types`; re-exported here for backward compatibility.
+pub use hopr_types::network_types::errors::{NetworkTypeError, Result};

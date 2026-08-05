@@ -11,7 +11,7 @@ name         = "hopr-utilities"
 readme       = "README.md"
 repository   = "https://github.com/hoprnet/hopr-utilities"
 rust-version = "1.91"
-version      = "0.5.1"
+version      = "0.6.0"
 
 [lints.rust]
 # `tokio_unstable` gates the cooperative-yield (`tokio::task::coop`) code paths; declare it so the
@@ -43,7 +43,7 @@ network-types = [
   "dep:strum",
   "dep:thiserror",
   "dep:tracing",
-  "hopr-types/crypto",
+  "hopr-types/network",
 ]
 network-types-capture = ["dep:pcap-file", "network-types"]
 network-types-runtime-tokio = [
@@ -202,4 +202,4 @@ tracing = { version = "0.1.44", features = ["release_max_level_debug"] }
 
 # --- HOPR crates (crates.io) ---
 hopr-api   = { version = "1.16.0", features = ["chain"] }
-hopr-types = { version = "2.0.2", features = ["use-bindings"] }
+hopr-types = { version = "2.2.0", features = ["use-bindings"] }
