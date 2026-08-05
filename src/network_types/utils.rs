@@ -111,17 +111,51 @@ impl Hash for SocketAddrStr {
 }
 
 #[cfg(feature = "runtime-tokio")]
-pub use tokio_utils::{copy_duplex, copy_duplex_abortable};
+pub use tokio_utils::{copy_duplex, copy_duplex_abortable, transfer_session};
 
 #[cfg(feature = "runtime-tokio")]
 mod tokio_utils {
     use futures::{
         FutureExt,
-        future::{AbortHandle, Abortable},
+        future::{AbortHandle, AbortRegistration, Abortable},
     };
     use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
     use super::*;
+
+    /// Bidirectionally forwards all data between two streams until either side closes, with an
+    /// equally sized buffer in both directions.
+    ///
+    /// If `abort_stream` is given, the transfer can be aborted from the `b` (stream) side only;
+    /// this is useful for UDP-like streams that cannot signal termination via socket closure.
+    pub async fn transfer_session<A, B>(
+        a: &mut A,
+        b: &mut B,
+        max_buffer: usize,
+        abort_stream: Option<AbortRegistration>,
+    ) -> std::io::Result<(usize, usize)>
+    where
+        A: AsyncRead + AsyncWrite + Unpin + ?Sized,
+        B: AsyncRead + AsyncWrite + Unpin + ?Sized,
+    {
+        tracing::debug!(
+            egress_buffer = max_buffer,
+            ingress_buffer = max_buffer,
+            "session buffers"
+        );
+
+        if let Some(abort_stream) = abort_stream {
+            // We only allow aborting from the "stream" side, not from the "session" side.
+            let (_, dummy) = AbortHandle::new_pair();
+            copy_duplex_abortable(a, b, (max_buffer, max_buffer), (dummy, abort_stream))
+                .await
+                .map(|(a, b)| (a as usize, b as usize))
+        } else {
+            copy_duplex(a, b, (max_buffer, max_buffer))
+                .await
+                .map(|(a, b)| (a as usize, b as usize))
+        }
+    }
 
     #[derive(Debug)]
     enum TransferState {
