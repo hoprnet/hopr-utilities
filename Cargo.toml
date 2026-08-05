@@ -203,3 +203,8 @@ tracing = { version = "0.1.44", features = ["release_max_level_debug"] }
 # --- HOPR crates (crates.io) ---
 hopr-api   = { version = "1.16.0", features = ["chain"] }
 hopr-types = { version = "2.2.0", features = ["use-bindings"] }
+
+# TEMPORARY (multi-repo chain bootstrap): hopr-types 2.2.0 is not yet on crates.io.
+# Sourced from the branch during the chain; remove once 2.2.0 is published.
+[patch.crates-io]
+hopr-types = { git = "https://github.com/hoprnet/hopr-types", branch = "kauki/feat/types/network-types-and-session-types" }

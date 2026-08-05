@@ -1,7 +1,7 @@
 // The plain network- and session-related types now live in `hopr-types`; re-exported here for
 // backward compatibility. Runtime-specific behavior (DNS resolution) stays in this crate via the
 // [`IpOrHostExt`] extension trait below.
-pub use hopr_types::network_types::{IpOrHost, IpProtocol, SealedHost, ServiceId, SessionId, SessionTarget};
+pub use hopr_types::network::{IpOrHost, IpProtocol, SealedHost, ServiceId, SessionId, SessionTarget};
 
 /// Runtime-specific extensions for [`IpOrHost`].
 #[cfg(feature = "network-types-runtime-tokio")]
