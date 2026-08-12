@@ -5,7 +5,7 @@ pub use blokli_client::{BlokliTestClient, BlokliTestState, exports::Entry};
 pub use emulator::{ChainMutator, FullStateEmulator, StaticState};
 pub use hopr_api::chain::ChainInfo;
 use hopr_api::{
-    chain::DeployedSafe,
+    chain::{DeployedSafe, ServiceEntry, ServiceType, ServiceTypeConfig},
     types::{
         chain::{ParsedHoprChainAction, contract_addresses_for_network},
         crypto::{
@@ -28,6 +28,17 @@ impl Default for BlokliTestStateBuilder {
 }
 
 const DEFAULT_ALLOWANCE: u128 = 10_000_000_000_000_u128;
+
+/// Converts a timestamp into the Unix seconds the Blokli API represents it with.
+///
+/// Panics on a time outside the range of that representation: before the Unix epoch, or beyond
+/// what the 32-bit field of the API can hold.
+fn unix_seconds(time: std::time::SystemTime) -> i32 {
+    time.duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|since_epoch| i32::try_from(since_epoch.as_secs()).ok())
+        .expect("timestamp must be a Unix time representable in 32 bits")
+}
 
 impl From<BlokliTestState> for BlokliTestStateBuilder {
     fn from(state: BlokliTestState) -> Self {
@@ -174,6 +185,75 @@ impl BlokliTestStateBuilder {
                 },
             )
         }));
+        self
+    }
+
+    /// Appends the initial [`ServiceEntries`](ServiceEntry) of the on-chain service registry to the state.
+    ///
+    /// The service type of each entry is rendered the way Blokli renders it: the ASCII name of the type, or
+    /// `0x`-prefixed hex for a type that does not follow that convention.
+    ///
+    /// The function will panic if two entries share the same service type and node, because the registry holds at
+    /// most one entry per such pair. The configuration of the types themselves is separate, see
+    /// [`BlokliTestStateBuilder::with_service_types`].
+    #[must_use]
+    pub fn with_services<I: IntoIterator<Item = ServiceEntry>>(mut self, services: I) -> Self {
+        for service in services {
+            let service_type = service.service_type.to_string();
+            match self
+                .0
+                .services
+                .entry(BlokliTestState::service_entry_key(&service_type, &service.node.into()))
+            {
+                Entry::Occupied(_) => panic!(
+                    "duplicate service entry for service type {service_type} of node {}",
+                    service.node
+                ),
+                Entry::Vacant(v) => {
+                    v.insert(blokli_client::api::types::ServiceEntry {
+                        service_type,
+                        node: const_hex::encode(service.node),
+                        safe: const_hex::encode(service.safe),
+                        metadata: format!("0x{}", const_hex::encode(&service.metadata)),
+                        registered_at: unix_seconds(service.registered_at),
+                        updated_at: unix_seconds(service.updated_at),
+                    });
+                }
+            }
+        }
+        self
+    }
+
+    /// Appends the initial [`ServiceTypeConfigs`](ServiceTypeConfig) of the on-chain service registry to the state.
+    ///
+    /// Entries added by [`BlokliTestStateBuilder::with_services`] carry no configuration of their type, so a test
+    /// that reads type configuration must seed it here as well.
+    ///
+    /// The function will panic if the same service type is given twice.
+    #[must_use]
+    pub fn with_service_types<I: IntoIterator<Item = (ServiceType, ServiceTypeConfig)>>(
+        mut self,
+        service_types: I,
+    ) -> Self {
+        for (service_type, config) in service_types {
+            let service_type = service_type.to_string();
+            match self.0.service_types.entry(service_type.clone()) {
+                Entry::Occupied(_) => panic!("duplicate service type {service_type}"),
+                Entry::Vacant(v) => {
+                    v.insert(blokli_client::api::types::ServiceTypeInfo {
+                        service_type,
+                        owner: config.owner.map(const_hex::encode),
+                        requirement: config.requirement.map(const_hex::encode),
+                        // Rendered the way blokli renders every balance - `Display`, which carries
+                        // the currency - not as bare wei. `HoprBalance::from_str` rejects a bare
+                        // number, so a consumer parsing this back has no other option, and
+                        // `with_ticket_price` above already does the same.
+                        registration_burn: config.registration_burn.to_string(),
+                        update_burn: config.update_burn.to_string(),
+                    });
+                }
+            }
+        }
         self
     }
 
@@ -365,5 +445,43 @@ impl BlokliTestStateBuilder {
         let (sender, receiver) = futures::channel::mpsc::unbounded();
         let client = BlokliTestClient::new(self.0, FullStateEmulator(module_address, Some(sender)));
         (client, receiver)
+    }
+}
+
+/// The harness is otherwise exercised by its consumers rather than by tests of its own.
+///
+/// The chain info is the exception: [`FullStateEmulator`] deserializes [`ContractAddresses`] out of the JSON blob the
+/// builder writes, exactly like the real connector does, and that struct puts `#[serde(default)]` on none of its
+/// fields. A key missing from the blob is therefore a runtime failure on the first transaction of every consumer
+/// test, not a compile error here.
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use hopr_api::types::chain::ContractAddresses;
+
+    use super::*;
+
+    #[test]
+    fn hopr_network_chain_info_writes_contract_addresses_including_the_service_registry() -> anyhow::Result<()> {
+        let (_, expected) = contract_addresses_for_network("anvil-localhost").expect("network name not found");
+
+        let blob = BlokliTestStateBuilder::default()
+            .with_hopr_network_chain_info("anvil-localhost")
+            .build()
+            .chain_info
+            .contract_addresses
+            .0;
+
+        // Parsed as a plain map first: `ContractAddresses` could gain a default for the field and still
+        // deserialize a blob that never carried it.
+        let keys: BTreeMap<String, serde_json::Value> = serde_json::from_str(&blob)?;
+        assert!(keys.contains_key("service_registry"));
+
+        let addresses: ContractAddresses = serde_json::from_str(&blob)?;
+        assert_eq!(addresses.service_registry, expected.service_registry);
+        assert_eq!(addresses, expected);
+
+        Ok(())
     }
 }
