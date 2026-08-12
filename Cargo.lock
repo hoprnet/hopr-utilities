@@ -1503,6 +1503,7 @@ dependencies = [
 [[package]]
 name = "blokli-client"
 version = "0.31.0"
+source = "git+https://github.com/hoprnet/blokli-client?rev=2b2d41a387f46d2d7adf4e0e66dd4dff520c0b92#2b2d41a387f46d2d7adf4e0e66dd4dff520c0b92"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -3229,6 +3230,7 @@ dependencies = [
 [[package]]
 name = "hopr-api"
 version = "1.21.0"
+source = "git+https://github.com/hoprnet/hopr-api?rev=7c26c0bee697d33529dc9412c271ce6c8d726fc1#7c26c0bee697d33529dc9412c271ce6c8d726fc1"
 dependencies = [
  "async-trait",
  "auto_impl",
@@ -3245,6 +3247,7 @@ dependencies = [
 [[package]]
 name = "hopr-bindings"
 version = "4.12.2"
+source = "git+https://github.com/hoprnet/contracts?rev=6ce45eb5e7d433545d82ea32e27562eb0fc329c3#6ce45eb5e7d433545d82ea32e27562eb0fc329c3"
 dependencies = [
  "alloy",
  "anyhow",
@@ -3261,6 +3264,7 @@ dependencies = [
 [[package]]
 name = "hopr-types"
 version = "2.3.0"
+source = "git+https://github.com/hoprnet/hopr-types?rev=2a3bb391f1f98475d033b105c69090d050aaff0c#2a3bb391f1f98475d033b105c69090d050aaff0c"
 dependencies = [
  "aes",
  "anyhow",
