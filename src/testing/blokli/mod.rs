@@ -5,7 +5,7 @@ pub use blokli_client::{BlokliTestClient, BlokliTestState, exports::Entry};
 pub use emulator::{ChainMutator, FullStateEmulator, StaticState};
 pub use hopr_api::chain::ChainInfo;
 use hopr_api::{
-    chain::{DeployedSafe, ServiceEntry, ServiceType, ServiceTypeConfig},
+    chain::{DeployedSafe, ServiceEntry, ServiceRegistryConfig, ServiceType, ServiceTypeConfig},
     types::{
         chain::{ParsedHoprChainAction, contract_addresses_for_network},
         crypto::{
@@ -29,15 +29,16 @@ impl Default for BlokliTestStateBuilder {
 
 const DEFAULT_ALLOWANCE: u128 = 10_000_000_000_000_u128;
 
-/// Converts a timestamp into the Unix seconds the Blokli API represents it with.
+/// Converts a timestamp into the unsigned Unix seconds represented by the Blokli API.
 ///
-/// Panics on a time outside the range of that representation: before the Unix epoch, or beyond
-/// what the 32-bit field of the API can hold.
-fn unix_seconds(time: std::time::SystemTime) -> i32 {
-    time.duration_since(std::time::UNIX_EPOCH)
-        .ok()
-        .and_then(|since_epoch| i32::try_from(since_epoch.as_secs()).ok())
-        .expect("timestamp must be a Unix time representable in 32 bits")
+/// Panics for a timestamp before the Unix epoch.
+fn unix_seconds(time: std::time::SystemTime) -> blokli_client::api::types::Uint64 {
+    blokli_client::api::types::Uint64(
+        time.duration_since(std::time::UNIX_EPOCH)
+            .expect("timestamp must not precede the Unix epoch")
+            .as_secs()
+            .to_string(),
+    )
 }
 
 impl From<BlokliTestState> for BlokliTestStateBuilder {
@@ -257,6 +258,16 @@ impl BlokliTestStateBuilder {
         self
     }
 
+    /// Sets the initial registry-wide service configuration.
+    #[must_use]
+    pub fn with_service_registry_config(mut self, config: ServiceRegistryConfig) -> Self {
+        self.0.service_registry_config = blokli_client::api::types::ServiceRegistryConfig {
+            type_registration_fee: config.type_registration_fee.to_string(),
+            node_safe_registry: const_hex::encode(config.node_safe_registry),
+        };
+        self
+    }
+
     /// Generates [`AccountEntries`](AccountEntry) for the given addresses.
     ///
     /// The off-chain keys and safe addresses are chosen deterministically using a
@@ -456,11 +467,36 @@ impl BlokliTestStateBuilder {
 /// test, not a compile error here.
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::{collections::BTreeMap, time::Duration};
 
     use hopr_api::types::chain::ContractAddresses;
 
     use super::*;
+
+    #[test]
+    fn unix_seconds_supports_the_full_uint64_api_representation() {
+        let timestamp = std::time::UNIX_EPOCH + Duration::from_secs(u64::from(u32::MAX) + 1);
+
+        assert_eq!(unix_seconds(timestamp).0, "4294967296");
+    }
+
+    #[test]
+    fn service_registry_config_seeds_the_initial_snapshot() {
+        let config = ServiceRegistryConfig {
+            type_registration_fee: HoprBalance::new_base(123),
+            node_safe_registry: Address::new(&[0x11; Address::SIZE]),
+        };
+
+        let state = BlokliTestStateBuilder::default()
+            .with_service_registry_config(config)
+            .build();
+
+        assert_eq!(state.service_registry_config.type_registration_fee, "123 wxHOPR");
+        assert_eq!(
+            state.service_registry_config.node_safe_registry,
+            "1111111111111111111111111111111111111111"
+        );
+    }
 
     #[test]
     fn hopr_network_chain_info_writes_contract_addresses_including_the_service_registry() -> anyhow::Result<()> {
