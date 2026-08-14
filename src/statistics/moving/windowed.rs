@@ -84,6 +84,30 @@ impl<const BUCKETS: usize> WindowedRatio<BUCKETS> {
         (expected > 0).then(|| (observed as f64 / expected as f64).clamp(0.0, 1.0))
     }
 
+    /// Observed / expected across the most recent `slices` only, or `None` when they hold nothing.
+    ///
+    /// The full-window [`Self::value`] dilutes a sudden change by the history still in the ring: a
+    /// path that stops delivering right now is one bad slice against `BUCKETS - 1` healthy ones.
+    /// Reading the newest slices alone is what makes a collapse visible while it is still recent,
+    /// at the cost of resting on less evidence -- so it is meant to be compared *against* the full
+    /// window rather than used as a standalone verdict.
+    ///
+    /// `slices` is clamped to `1..=BUCKETS`, so a caller cannot ask for a window wider than the
+    /// ring or narrower than one slice.
+    pub fn recent_value(&self, slices: usize, now: Instant) -> Option<f64> {
+        let slices = slices.clamp(1, BUCKETS) as u64;
+        let current = self.absolute_bucket(now);
+        let oldest = current.saturating_sub(slices - 1);
+
+        let (expected, observed) = self
+            .buckets
+            .iter()
+            .filter(|b| b.stamp >= oldest && b.stamp <= current)
+            .fold((0u64, 0u64), |(e, o), b| (e + b.expected, o + b.observed));
+
+        (expected > 0).then(|| (observed as f64 / expected as f64).clamp(0.0, 1.0))
+    }
+
     /// Total span covered by the window.
     pub fn window(&self) -> Duration {
         self.bucket_width * BUCKETS as u32
@@ -122,6 +146,78 @@ mod tests {
 
     fn at(epoch: Instant, secs: u64) -> Instant {
         epoch + Duration::from_secs(secs)
+    }
+
+    /// The whole point: a collapse that the full window dilutes must be visible in the last slices.
+    #[test]
+    fn recent_value_should_see_a_collapse_the_full_window_still_dilutes() {
+        let epoch = Instant::now();
+        let mut r = ratio(epoch);
+
+        // Three healthy slices, then one where nothing comes back.
+        for sec in 0..3 {
+            r.record_expected(100, at(epoch, sec));
+            r.record_observed(100, at(epoch, sec));
+        }
+        r.record_expected(100, at(epoch, 3));
+
+        let now = at(epoch, 3);
+        let full = r.value(now).expect("window holds evidence");
+        let recent = r.recent_value(1, now).expect("newest slice holds evidence");
+
+        // 300/400 against 0/100 -- the full window is still mostly healthy history.
+        assert_eq!(recent, 0.0, "the newest slice saw nothing come back");
+        assert!(
+            full > 0.5,
+            "the full window should still be dominated by healthy history, got {full}"
+        );
+    }
+
+    #[test]
+    fn recent_value_should_match_the_full_window_when_asked_for_every_slice() {
+        let epoch = Instant::now();
+        let mut r = ratio(epoch);
+        for sec in 0..4 {
+            r.record_expected(10, at(epoch, sec));
+            r.record_observed(5, at(epoch, sec));
+        }
+
+        let now = at(epoch, 3);
+        assert_eq!(r.recent_value(4, now), r.value(now));
+        // Clamped, so over-asking is the same as asking for the whole ring.
+        assert_eq!(r.recent_value(999, now), r.value(now));
+    }
+
+    #[test]
+    fn recent_value_should_be_none_when_the_recent_slices_hold_nothing() {
+        let epoch = Instant::now();
+        let mut r = ratio(epoch);
+        r.record_expected(100, at(epoch, 0));
+        r.record_observed(100, at(epoch, 0));
+
+        // Two slices later nothing has been expected, so there is no evidence either way --
+        // which must read as "no data", never as a failing peer.
+        assert_eq!(r.recent_value(1, at(epoch, 2)), None);
+        assert!(r.value(at(epoch, 2)).is_some(), "the full window still holds the old slice");
+    }
+
+    /// Recovery has to be visible promptly too, not only failure.
+    #[test]
+    fn recent_value_should_climb_back_before_the_full_window_does() {
+        let epoch = Instant::now();
+        let mut r = ratio(epoch);
+
+        for sec in 0..3 {
+            r.record_expected(100, at(epoch, sec));
+        }
+        r.record_expected(100, at(epoch, 3));
+        r.record_observed(100, at(epoch, 3));
+
+        let now = at(epoch, 3);
+        let full = r.value(now).expect("window holds evidence");
+        let recent = r.recent_value(1, now).expect("newest slice holds evidence");
+        assert_eq!(recent, 1.0, "the newest slice is fully recovered");
+        assert!(full < 0.5, "the full window still carries the outage, got {full}");
     }
 
     #[test]
