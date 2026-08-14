@@ -5,6 +5,7 @@ ignore = [
   "RUSTSEC-2026-0173", # proc-macro-2 unmaintained, need aquamarine update
   "RUSTSEC-2026-0220", # needs alloy update
   "RUSTSEC-2026-0249", # smartstring unmaintained, from hopr-types -> opentelemetry
+  "RUSTSEC-2026-0253", # `lru` unsound, pinned at 0.16.4 by alloy-provider; the fix (>= 0.18.2) needs an alloy bump
 ]
 informational_warnings = ["unmaintained"]
 severity_threshold = "low"
