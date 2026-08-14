@@ -1,6 +1,9 @@
 //! Ratio of observed to expected events over a sliding time window.
 
-use std::time::{Duration, Instant};
+use std::{
+    cmp::Ordering,
+    time::{Duration, Instant},
+};
 
 /// One time slice of the ring.
 ///
@@ -49,7 +52,12 @@ impl<const BUCKETS: usize> WindowedRatio<BUCKETS> {
     /// More, narrower slices track change more finely at the cost of memory; fewer, wider ones
     /// smooth more. The width is clamped away from zero, which would divide by zero when locating
     /// a slice.
+    ///
+    /// `BUCKETS` must be at least one; a ring with no slices has nowhere to record into and is
+    /// rejected at compile time, rather than dividing by zero at the first write.
     pub fn new(bucket_width: Duration, epoch: Instant) -> Self {
+        const { assert!(BUCKETS > 0, "WindowedRatio needs at least one bucket") }
+
         Self {
             buckets: [Bucket::default(); BUCKETS],
             bucket_width: bucket_width.max(Duration::from_millis(1)),
@@ -58,13 +66,23 @@ impl<const BUCKETS: usize> WindowedRatio<BUCKETS> {
     }
 
     /// Records that `count` events are expected to be observed later.
+    ///
+    /// A record whose slice has already been overwritten by a newer one is dropped; see
+    /// [`Self::bucket_at`].
     pub fn record_expected(&mut self, count: u64, now: Instant) {
-        self.bucket_at(now).expected += count;
+        if let Some(bucket) = self.bucket_at(now) {
+            bucket.expected = bucket.expected.saturating_add(count);
+        }
     }
 
     /// Records that `count` expected events were observed.
+    ///
+    /// A record whose slice has already been overwritten by a newer one is dropped; see
+    /// [`Self::bucket_at`].
     pub fn record_observed(&mut self, count: u64, now: Instant) {
-        self.bucket_at(now).observed += count;
+        if let Some(bucket) = self.bucket_at(now) {
+            bucket.observed = bucket.observed.saturating_add(count);
+        }
     }
 
     /// Observed / expected across the live window, or `None` when nothing was expected in it.
@@ -72,16 +90,7 @@ impl<const BUCKETS: usize> WindowedRatio<BUCKETS> {
     /// `None` is not zero: it means the window holds no evidence either way, which callers must
     /// treat as neutral rather than as a failing peer.
     pub fn value(&self, now: Instant) -> Option<f64> {
-        let current = self.absolute_bucket(now);
-        let oldest = current.saturating_sub(BUCKETS as u64 - 1);
-
-        let (expected, observed) = self
-            .buckets
-            .iter()
-            .filter(|b| b.stamp >= oldest && b.stamp <= current)
-            .fold((0u64, 0u64), |(e, o), b| (e + b.expected, o + b.observed));
-
-        (expected > 0).then(|| (observed as f64 / expected as f64).clamp(0.0, 1.0))
+        self.recent_value(BUCKETS, now)
     }
 
     /// Observed / expected across the most recent `slices` only, or `None` when they hold nothing.
@@ -99,39 +108,56 @@ impl<const BUCKETS: usize> WindowedRatio<BUCKETS> {
         let current = self.absolute_bucket(now);
         let oldest = current.saturating_sub(slices - 1);
 
+        // Saturating, because a wrapped total would not merely be imprecise: it would invert the
+        // ratio and read as a collapse.
         let (expected, observed) = self
             .buckets
             .iter()
             .filter(|b| b.stamp >= oldest && b.stamp <= current)
-            .fold((0u64, 0u64), |(e, o), b| (e + b.expected, o + b.observed));
+            .fold((0u64, 0u64), |(e, o), b| {
+                (e.saturating_add(b.expected), o.saturating_add(b.observed))
+            });
 
         (expected > 0).then(|| (observed as f64 / expected as f64).clamp(0.0, 1.0))
     }
 
     /// Total span covered by the window.
+    ///
+    /// Saturates at [`Duration::MAX`] rather than panicking, so an absurdly wide slice degrades to
+    /// "effectively forever" instead of taking the caller down.
     pub fn window(&self) -> Duration {
-        self.bucket_width * BUCKETS as u32
+        self.bucket_width
+            .saturating_mul(u32::try_from(BUCKETS).unwrap_or(u32::MAX))
     }
 
     fn absolute_bucket(&self, now: Instant) -> u64 {
         (now.saturating_duration_since(self.epoch).as_nanos() / self.bucket_width.as_nanos()) as u64
     }
 
-    /// The slot for `now`, cleared first if it still holds an older slice.
-    fn bucket_at(&mut self, now: Instant) -> &mut Bucket {
+    /// The slot for `now`, cleared first if it still holds an older slice, or `None` if it already
+    /// holds a newer one.
+    ///
+    /// Every `BUCKETS`-th slice shares a slot, so a record that arrives out of order -- with a
+    /// `now` behind one already recorded -- can land on a slot belonging to a newer slice. Clearing
+    /// it would trade live evidence for a slice that has since aged out of the window, so the late
+    /// record is dropped instead.
+    fn bucket_at(&mut self, now: Instant) -> Option<&mut Bucket> {
         let absolute = self.absolute_bucket(now);
         let bucket = &mut self.buckets[(absolute % BUCKETS as u64) as usize];
 
-        if bucket.stamp != absolute {
-            // Reused for a new slice, so the previous slice's counts go with it.
-            *bucket = Bucket {
-                stamp: absolute,
-                expected: 0,
-                observed: 0,
-            };
+        match absolute.cmp(&bucket.stamp) {
+            Ordering::Less => None,
+            Ordering::Equal => Some(bucket),
+            Ordering::Greater => {
+                // Reused for a newer slice, so the previous slice's counts go with it.
+                *bucket = Bucket {
+                    stamp: absolute,
+                    expected: 0,
+                    observed: 0,
+                };
+                Some(bucket)
+            }
         }
-
-        bucket
     }
 }
 
@@ -198,7 +224,10 @@ mod tests {
         // Two slices later nothing has been expected, so there is no evidence either way --
         // which must read as "no data", never as a failing peer.
         assert_eq!(r.recent_value(1, at(epoch, 2)), None);
-        assert!(r.value(at(epoch, 2)).is_some(), "the full window still holds the old slice");
+        assert!(
+            r.value(at(epoch, 2)).is_some(),
+            "the full window still holds the old slice"
+        );
     }
 
     /// Recovery has to be visible promptly too, not only failure.
@@ -325,6 +354,83 @@ mod tests {
     }
 
     #[test]
+    fn window_should_saturate_rather_than_overflow_on_an_absurd_slice_width() {
+        let epoch = Instant::now();
+        let r: WindowedRatio<4> = WindowedRatio::new(Duration::MAX, epoch);
+
+        // `Duration::MAX * 4` overflows; multiplying it out would panic instead of answering.
+        assert_eq!(Duration::MAX, r.window());
+    }
+
+    #[test]
+    fn a_late_record_should_not_erase_a_newer_slice() {
+        let epoch = Instant::now();
+        let mut r = ratio(epoch);
+
+        // Slices 0 and 4 share a slot in a 4-slice ring. Recording slice 4 first and then a late
+        // record for slice 0 used to clear the slot, throwing away live evidence in exchange for a
+        // slice that has already aged out of the window.
+        r.record_expected(100, at(epoch, 4));
+        r.record_observed(100, at(epoch, 4));
+
+        r.record_expected(50, epoch);
+        r.record_observed(0, epoch);
+
+        assert_eq!(
+            Some(1.0),
+            r.value(at(epoch, 4)),
+            "the late record must not displace the newer slice"
+        );
+    }
+
+    #[test]
+    fn a_late_record_should_still_land_in_a_slice_that_is_still_live() {
+        let epoch = Instant::now();
+        let mut r = ratio(epoch);
+
+        // Out of order, but slice 0 is still the one that slot holds -- so this is a genuine
+        // in-window observation and must be counted, not dropped along with the stale ones.
+        r.record_expected(10, at(epoch, 1));
+        r.record_expected(10, epoch);
+        r.record_observed(10, epoch);
+
+        assert_eq!(Some(0.5), r.value(at(epoch, 1)));
+    }
+
+    #[test]
+    fn counters_should_saturate_rather_than_overflow() {
+        let epoch = Instant::now();
+        let mut r = ratio(epoch);
+
+        // Wrapping here would not merely lose precision: the denominator would fall below the
+        // numerator and a perfectly healthy window would read as a collapse.
+        r.record_expected(u64::MAX, epoch);
+        r.record_expected(1, epoch);
+        r.record_observed(u64::MAX, epoch);
+        r.record_observed(1, epoch);
+
+        assert_eq!(Some(1.0), r.value(epoch));
+    }
+
+    #[test]
+    fn totals_should_saturate_across_slices() {
+        let epoch = Instant::now();
+        let mut r = ratio(epoch);
+
+        // Each slice fits in a `u64`; their sum does not.
+        for sec in 0..4 {
+            r.record_expected(u64::MAX, at(epoch, sec));
+            r.record_observed(u64::MAX / 2, at(epoch, sec));
+        }
+
+        let value = r.value(at(epoch, 3)).expect("the window holds evidence");
+        assert!(
+            (0.0..=1.0).contains(&value),
+            "a saturated total must stay a ratio, got {value}"
+        );
+    }
+
+    #[test]
     fn should_be_copy_so_it_can_live_inside_a_copy_observation() {
         // Load-bearing: the graph edge weight that holds this is `Copy` and returned by value, so
         // an allocation or interior mutability here would ripple out into every consumer.
@@ -349,5 +455,4 @@ mod tests {
         r.record_observed(1, epoch);
         assert_eq!(Some(1.0), r.value(epoch));
     }
-
 }
