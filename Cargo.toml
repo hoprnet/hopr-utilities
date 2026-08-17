@@ -201,14 +201,5 @@ tokio-util = { version = "0.7.18", default-features = false, features = [
 tracing = { version = "0.1.44", features = ["release_max_level_debug"] }
 
 # --- HOPR crates (crates.io) ---
-# TEMPORARY: pinned to the unreleased hopr-api 2.0.0 branch to verify this bump compiles.
-#
-# `version` alongside `git` is the "multiple locations" form: the git source wins locally, while
-# packaging keeps the version requirement and drops the git specification. Without it, cargo refuses
-# to normalise the manifest at all ("all dependencies must have a version requirement specified when
-# packaging"). The publish dry-run still fails until hopr-api 2.0.0 reaches crates.io, but on the
-# resolution step rather than on the manifest.
-hopr-api = { version = "2.0.0", git = "https://github.com/hoprnet/hopr-api", rev = "ee65b340cf09fd6031735477cc1171d7610694a3", features = [
-  "chain",
-] }
+hopr-api   = { version = "2.0.0", features = ["chain"] }
 hopr-types = { version = "2.3.0", features = ["use-bindings"] }
