@@ -3404,7 +3404,7 @@ dependencies = [
 
 [[package]]
 name = "hopr-utilities"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "arrayvec",
