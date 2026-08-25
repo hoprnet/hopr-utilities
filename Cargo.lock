@@ -1557,9 +1557,9 @@ dependencies = [
 
 [[package]]
 name = "blokli-client"
-version = "0.31.0"
+version = "0.32.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1645e71eacbae4cf304636a390a08b5c03cf068a814923dbd1631d5558f7ddeb"
+checksum = "2e7ee57f8d848cdd86b0b2b4f144f10a9a28edba042d609d08850f57bbd79a47"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -1572,7 +1572,7 @@ dependencies = [
  "futures",
  "futures-time",
  "hex",
- "hopr-types 2.3.0",
+ "hopr-types",
  "http",
  "indexmap 2.14.0",
  "launchdarkly-sdk-transport",
@@ -3307,16 +3307,16 @@ dependencies = [
 
 [[package]]
 name = "hopr-api"
-version = "3.0.0"
+version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ea04294008efbd07089c4ee1d1fa60c0b178b1b8637ed76935940595efe61eb9"
+checksum = "224e2ecb9821e45905ce5a5ad9e8b06a29cb85daf9f3f024b3efbaf665686e49"
 dependencies = [
  "async-trait",
  "auto_impl",
  "chrono",
  "futures",
  "futures-concurrency",
- "hopr-types 3.0.0",
+ "hopr-types",
  "libp2p-identity",
  "strum",
  "thiserror 2.0.20",
@@ -3325,9 +3325,9 @@ dependencies = [
 
 [[package]]
 name = "hopr-bindings"
-version = "4.13.0"
+version = "5.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8be6fd9b90421c230f80c6ba872cd02c65cfd5e84cdb99956edbd8a6dac6334c"
+checksum = "13cb248171e67e6bf5891c2e60e5a02389ba3121da8a1aa77b3f435e75c6099f"
 dependencies = [
  "alloy",
  "anyhow",
@@ -3343,61 +3343,9 @@ dependencies = [
 
 [[package]]
 name = "hopr-types"
-version = "2.3.0"
+version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a19fe24538d5d68590496763119afbb5f8ccb466f88abbf36cda7a8c7d49e1f1"
-dependencies = [
- "aes",
- "aquamarine",
- "ark-bn254 0.6.0",
- "ark-ec 0.6.0",
- "ark-ff 0.6.0",
- "ark-serialize 0.6.0",
- "arrayvec",
- "async-trait",
- "babyjubjub-ec",
- "bigdecimal",
- "blake3",
- "chacha20",
- "chrono",
- "cipher",
- "const-hex",
- "ctr",
- "curve25519-dalek 5.0.0",
- "digest 0.11.3",
- "ed25519-dalek 3.0.0",
- "elliptic-curve 0.14.1",
- "float-cmp",
- "hash2curve",
- "hex-literal",
- "hybrid-array",
- "k256 0.14.0",
- "lazy_static",
- "libp2p-identity",
- "multiaddr",
- "num_enum",
- "poly1305",
- "primitive-types 0.14.0",
- "rand 0.10.2",
- "rayon",
- "regex",
- "secp256k1 0.31.1",
- "sha2 0.11.0",
- "sha3 0.12.0",
- "smart-default",
- "strum",
- "subtle",
- "thiserror 2.0.20",
- "tracing",
- "typenum",
- "zeroize",
-]
-
-[[package]]
-name = "hopr-types"
-version = "3.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4a497683452629aacda6776373e801c0686edfda2f2e97fa3fb22c74577ec3d9"
+checksum = "6994bdc05812ab588d3fa970c1df9a7bea3d8808907baf30c0596a54b84458f3"
 dependencies = [
  "aes",
  "anyhow",
@@ -3471,7 +3419,7 @@ dependencies = [
  "futures-time",
  "hickory-resolver",
  "hopr-api",
- "hopr-types 3.0.0",
+ "hopr-types",
  "indexmap 2.14.0",
  "lazy_static",
  "libc",
