@@ -80,6 +80,8 @@ testing-blokli = [
   "dep:anyhow",
   "dep:blokli-client",
   "dep:hopr-api",
+  "dep:hopr-types",
+  "dep:tracing",
 ]
 
 [dependencies]
