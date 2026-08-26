@@ -5,7 +5,7 @@ pub use blokli_client::{BlokliTestClient, BlokliTestState, exports::Entry};
 pub use emulator::{ChainMutator, FullStateEmulator, StaticState};
 pub use hopr_api::chain::ChainInfo;
 use hopr_api::{
-    chain::DeployedSafe,
+    chain::{DeployedSafe, ServiceEntry, ServiceRegistryConfig, ServiceType, ServiceTypeConfig},
     types::{
         chain::{ParsedHoprChainAction, contract_addresses_for_network},
         crypto::{
@@ -21,13 +21,54 @@ use hopr_api::{
 #[derive(Clone)]
 pub struct BlokliTestStateBuilder(BlokliTestState);
 
+const GVPN_EXIT_REGISTRATION_BURN: &str = "1000000000000000000000 wei wxHOPR";
+const GVPN_EXIT_UPDATE_BURN: &str = "100000000000000000000 wei wxHOPR";
+const SERVICE_TYPE_REGISTRATION_FEE: &str = "1000000000000000000 wei wxHOPR";
+const DEFAULT_ALLOWANCE: u128 = 10_000_000_000_000_u128;
+
 impl Default for BlokliTestStateBuilder {
     fn default() -> Self {
-        Self(BlokliTestState::default()).with_hopr_network_chain_info("anvil-localhost")
+        let (_, addresses) = contract_addresses_for_network("anvil-localhost").expect("network name not found");
+
+        Self(BlokliTestState::default())
+            .with_hopr_network_chain_info("anvil-localhost")
+            .with_service_types([(
+                ServiceType::GVPN_EXIT,
+                ServiceTypeConfig {
+                    owner: Some(
+                        "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+                            .parse()
+                            .expect("default anvil deployer address must be valid"),
+                    ),
+                    requirement: None,
+                    registration_burn: GVPN_EXIT_REGISTRATION_BURN
+                        .parse()
+                        .expect("default registration burn must be valid"),
+                    update_burn: GVPN_EXIT_UPDATE_BURN
+                        .parse()
+                        .expect("default update burn must be valid"),
+                },
+            )])
+            .with_service_registry_config(ServiceRegistryConfig {
+                type_registration_fee: SERVICE_TYPE_REGISTRATION_FEE
+                    .parse()
+                    .expect("default service type registration fee must be valid"),
+                node_safe_registry: Address::new(addresses.node_safe_registry.as_slice()),
+            })
     }
 }
 
-const DEFAULT_ALLOWANCE: u128 = 10_000_000_000_000_u128;
+/// Converts a timestamp into the unsigned Unix seconds represented by the Blokli API.
+///
+/// Panics for a timestamp before the Unix epoch.
+fn unix_seconds(time: std::time::SystemTime) -> blokli_client::api::types::Uint64 {
+    blokli_client::api::types::Uint64(
+        time.duration_since(std::time::UNIX_EPOCH)
+            .expect("timestamp must not precede the Unix epoch")
+            .as_secs()
+            .to_string(),
+    )
+}
 
 impl From<BlokliTestState> for BlokliTestStateBuilder {
     fn from(state: BlokliTestState) -> Self {
@@ -174,6 +215,72 @@ impl BlokliTestStateBuilder {
                 },
             )
         }));
+        self
+    }
+
+    /// Appends the initial [`ServiceEntries`](ServiceEntry) of the on-chain service registry to the state.
+    ///
+    /// The service type of each entry is rendered the way Blokli renders it: the ASCII name of the type, or
+    /// `0x`-prefixed hex for a type that does not follow that convention.
+    #[must_use]
+    pub fn with_services<I: IntoIterator<Item = ServiceEntry>>(mut self, services: I) -> Self {
+        for service in services {
+            let service_type = service.service_type.to_string();
+            match self
+                .0
+                .services
+                .entry(BlokliTestState::service_entry_key(&service_type, &service.node.into()))
+            {
+                Entry::Occupied(_) => panic!(
+                    "duplicate service entry for service type {service_type} of node {}",
+                    service.node
+                ),
+                Entry::Vacant(v) => {
+                    v.insert(blokli_client::api::types::ServiceEntry {
+                        service_type,
+                        node: const_hex::encode(service.node),
+                        safe: const_hex::encode(service.safe),
+                        metadata: format!("0x{}", const_hex::encode(&service.metadata)),
+                        registered_at: unix_seconds(service.registered_at),
+                        updated_at: unix_seconds(service.updated_at),
+                    });
+                }
+            }
+        }
+        self
+    }
+
+    /// Appends the initial [`ServiceTypeConfigs`](ServiceTypeConfig) of the on-chain service registry to the state.
+    #[must_use]
+    pub fn with_service_types<I: IntoIterator<Item = (ServiceType, ServiceTypeConfig)>>(
+        mut self,
+        service_types: I,
+    ) -> Self {
+        for (service_type, config) in service_types {
+            let service_type = service_type.to_string();
+            match self.0.service_types.entry(service_type.clone()) {
+                Entry::Occupied(_) => panic!("duplicate service type {service_type}"),
+                Entry::Vacant(v) => {
+                    v.insert(blokli_client::api::types::ServiceTypeInfo {
+                        service_type,
+                        owner: config.owner.map(const_hex::encode),
+                        requirement: config.requirement.map(const_hex::encode),
+                        registration_burn: config.registration_burn.to_string(),
+                        update_burn: config.update_burn.to_string(),
+                    });
+                }
+            }
+        }
+        self
+    }
+
+    /// Sets the initial registry-wide service configuration.
+    #[must_use]
+    pub fn with_service_registry_config(mut self, config: ServiceRegistryConfig) -> Self {
+        self.0.service_registry_config = blokli_client::api::types::ServiceRegistryConfig {
+            type_registration_fee: config.type_registration_fee.to_string(),
+            node_safe_registry: const_hex::encode(config.node_safe_registry),
+        };
         self
     }
 
@@ -365,5 +472,29 @@ impl BlokliTestStateBuilder {
         let (sender, receiver) = futures::channel::mpsc::unbounded();
         let client = BlokliTestClient::new(self.0, FullStateEmulator(module_address, Some(sender)));
         (client, receiver)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_state_matches_the_deployed_gvpn_exit_type() {
+        let state = BlokliTestStateBuilder::default().build();
+        let service_type = state
+            .get_service_type(&ServiceType::GVPN_EXIT.as_encoded())
+            .expect("gvpn:exit must be registered by default");
+
+        assert_eq!(service_type.service_type, "gvpn:exit");
+        assert_eq!(
+            service_type.owner.as_deref(),
+            Some("f39fd6e51aad88f6f4ce6ab8827279cfffb92266")
+        );
+        assert_eq!(service_type.requirement, None);
+        assert_eq!(service_type.registration_burn, "1000 wxHOPR");
+        assert_eq!(service_type.update_burn, "100 wxHOPR");
+        assert_eq!(state.service_registry_config.type_registration_fee, "1 wxHOPR");
+        assert!(state.services.is_empty());
     }
 }

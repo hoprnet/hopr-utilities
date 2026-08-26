@@ -11,7 +11,7 @@ name         = "hopr-utilities"
 readme       = "README.md"
 repository   = "https://github.com/hoprnet/hopr-utilities"
 rust-version = "1.97"
-version      = "0.10.0"
+version      = "0.11.0"
 
 [lints.rust]
 # `tokio_unstable` gates the cooperative-yield (`tokio::task::coop`) code paths; declare it so the
@@ -80,6 +80,8 @@ testing-blokli = [
   "dep:anyhow",
   "dep:blokli-client",
   "dep:hopr-api",
+  "dep:hopr-types",
+  "dep:tracing",
 ]
 
 [dependencies]
@@ -152,15 +154,15 @@ resolver = "3"
 
 [workspace.dependencies]
 # --- external crates ---
-anyhow = "1.0.103"
-arrayvec = "0.7.7"
+anyhow = "1.0.104"
+arrayvec = "0.7.8"
 assertables = "10.1.0"
 async-lock = "3.4.2"
 auto_impl = "1.3.0"
-blokli-client = "0.31.0"
-crossfire = { version = "3.1.18", default-features = false }
+blokli-client = "0.32.0"
+crossfire = { version = "3.1.19", default-features = false }
 flume = { version = "0.12.0", default-features = false, features = ["async"] }
-futures = { version = "0.3.32", default-features = false, features = [
+futures = { version = "0.3.34", default-features = false, features = [
   "async-await",
   "std",
 ] }
@@ -180,26 +182,26 @@ multiaddr = "0.18.2"
 parameterized = "2.0.0"
 pcap-file = "2.0.0"
 pin-project = "1.1.13"
-rand = { version = "0.10.1", features = ["thread_rng"] }
+rand = { version = "0.10.2", features = ["thread_rng"] }
 rayon = "1.12.0"
-serde = { version = "1.0.228", features = ["derive"] }
+serde = { version = "1.0.229", features = ["derive"] }
 serde_bytes = "0.11.19"
-serial_test = "3.5.0"
-socket2 = "0.6.4"
+serial_test = "4.0.1"
+socket2 = "0.6.5"
 strum = { version = "0.28.0", features = ["derive"] }
 test-log = { version = "0.2.21", features = ["trace"] }
-thiserror = "2.0.18"
-tokio = { version = "1.52.3", features = [
+thiserror = "2.0.20"
+tokio = { version = "1.53.1", features = [
   "macros",
   "rt-multi-thread",
   "tracing",
 ] }
-tokio-util = { version = "0.7.18", default-features = false, features = [
+tokio-util = { version = "0.7.19", default-features = false, features = [
   "codec",
   "compat",
 ] }
 tracing = { version = "0.1.44", features = ["release_max_level_debug"] }
 
 # --- HOPR crates (crates.io) ---
-hopr-api   = { version = "3.0.0", features = ["chain"] }
-hopr-types = { version = "3.0.0", features = ["use-bindings"] }
+hopr-api   = { version = "4.0.1", features = ["chain"] }
+hopr-types = { version = "3.1.0", features = ["use-bindings"] }
