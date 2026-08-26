@@ -203,5 +203,5 @@ tokio-util = { version = "0.7.19", default-features = false, features = [
 tracing = { version = "0.1.44", features = ["release_max_level_debug"] }
 
 # --- HOPR crates (crates.io) ---
-hopr-api   = { version = "4.0.0", features = ["chain"] }
+hopr-api   = { version = "4.0.1", features = ["chain"] }
 hopr-types = { version = "3.1.0", features = ["use-bindings"] }
