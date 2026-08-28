@@ -1,8 +1,7 @@
 use std::{ops::Add, str::FromStr};
 
 use blokli_client::{BlokliTestState, BlokliTestStateMutator, api::types::RedeemedStats};
-use hopr_api::types::primitive::prelude::Address as ApiAddress;
-use hopr_types::{
+use hopr_api::types::{
     chain::{ContractAddresses, ParsedHoprChainAction},
     internal::channels::generate_channel_id,
     primitive::{
@@ -32,19 +31,19 @@ impl BlokliTestStateMutator for StaticState {
 /// This tries to emulate the behavior of the HOPR smart contracts on-chain.
 #[derive(Clone, Debug)]
 pub struct FullStateEmulator(
-    pub(crate) ApiAddress,
+    pub(crate) Address,
     pub(crate) Option<futures::channel::mpsc::UnboundedSender<ParsedHoprChainAction>>,
 );
 
 const EMULATED_TX_PRICE: u128 = 1_u128;
 
 impl FullStateEmulator {
-    pub fn new(module: ApiAddress) -> Self {
+    pub fn new(module: Address) -> Self {
         Self(module, None)
     }
 
     pub fn new_with_chain_events_interceptor(
-        module: ApiAddress,
+        module: Address,
     ) -> (Self, impl futures::Stream<Item = ParsedHoprChainAction>) {
         let (sender, receiver) = futures::channel::mpsc::unbounded();
         (Self(module, Some(sender)), receiver)
