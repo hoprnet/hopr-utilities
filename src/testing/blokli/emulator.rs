@@ -61,7 +61,8 @@ impl BlokliTestStateMutator for FullStateEmulator {
                 blokli_client::errors::ErrorKind::MockClientError(anyhow::anyhow!("failed to parse contract addresses"))
             })?;
 
-        let (action, sender) = ParsedHoprChainAction::parse_from_eip2718(signed_tx, &self.0, &addresses)
+        let module_address = Address::new(self.0.as_ref());
+        let (action, sender) = ParsedHoprChainAction::parse_from_eip2718(signed_tx, &module_address, &addresses)
             .map_err(|e| blokli_client::errors::ErrorKind::MockClientError(e.into()))?;
         tracing::debug!(%sender, ?action, "parsed action from signed transaction");
 
