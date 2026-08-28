@@ -1,7 +1,8 @@
 use std::{ops::Add, str::FromStr};
 
 use blokli_client::{BlokliTestState, BlokliTestStateMutator, api::types::RedeemedStats};
-use hopr_api::types::{
+use hopr_api::types::primitive::prelude::Address as ApiAddress;
+use hopr_types::{
     chain::{ContractAddresses, ParsedHoprChainAction},
     internal::channels::generate_channel_id,
     primitive::{
@@ -31,19 +32,19 @@ impl BlokliTestStateMutator for StaticState {
 /// This tries to emulate the behavior of the HOPR smart contracts on-chain.
 #[derive(Clone, Debug)]
 pub struct FullStateEmulator(
-    pub(crate) Address,
+    pub(crate) ApiAddress,
     pub(crate) Option<futures::channel::mpsc::UnboundedSender<ParsedHoprChainAction>>,
 );
 
 const EMULATED_TX_PRICE: u128 = 1_u128;
 
 impl FullStateEmulator {
-    pub fn new(module: Address) -> Self {
+    pub fn new(module: ApiAddress) -> Self {
         Self(module, None)
     }
 
     pub fn new_with_chain_events_interceptor(
-        module: Address,
+        module: ApiAddress,
     ) -> (Self, impl futures::Stream<Item = ParsedHoprChainAction>) {
         let (sender, receiver) = futures::channel::mpsc::unbounded();
         (Self(module, Some(sender)), receiver)
@@ -61,7 +62,8 @@ impl BlokliTestStateMutator for FullStateEmulator {
                 blokli_client::errors::ErrorKind::MockClientError(anyhow::anyhow!("failed to parse contract addresses"))
             })?;
 
-        let (action, sender) = ParsedHoprChainAction::parse_from_eip2718(signed_tx, &self.0, &addresses)
+        let module_address = Address::new(self.0.as_ref());
+        let (action, sender) = ParsedHoprChainAction::parse_from_eip2718(signed_tx, &module_address, &addresses)
             .map_err(|e| blokli_client::errors::ErrorKind::MockClientError(e.into()))?;
         tracing::debug!(%sender, ?action, "parsed action from signed transaction");
 

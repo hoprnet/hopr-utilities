@@ -1557,9 +1557,9 @@ dependencies = [
 
 [[package]]
 name = "blokli-client"
-version = "0.32.0"
+version = "0.32.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2e7ee57f8d848cdd86b0b2b4f144f10a9a28edba042d609d08850f57bbd79a47"
+checksum = "f2eed63aec778288cd2fa8aaf9537687e0b5a7d2eae53f7b0360e05fc02134db"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -1572,7 +1572,7 @@ dependencies = [
  "futures",
  "futures-time",
  "hex",
- "hopr-types 3.1.0",
+ "hopr-types",
  "http",
  "indexmap 2.14.0",
  "launchdarkly-sdk-transport",
@@ -3307,16 +3307,16 @@ dependencies = [
 
 [[package]]
 name = "hopr-api"
-version = "4.0.1"
+version = "4.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5fc0875b8cc5c7e5037b3a7c2e466156fde906e29a83e6fbff89da71a19b91c5"
+checksum = "5f004332014f2739746ff6428b01f6308791528ec0bc5b692e2c4837fa27c87c"
 dependencies = [
  "async-trait",
  "auto_impl",
  "chrono",
  "futures",
  "futures-concurrency",
- "hopr-types 3.1.0",
+ "hopr-types",
  "libp2p-identity",
  "strum",
  "thiserror 2.0.20",
@@ -3339,62 +3339,6 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "tracing",
-]
-
-[[package]]
-name = "hopr-types"
-version = "3.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6994bdc05812ab588d3fa970c1df9a7bea3d8808907baf30c0596a54b84458f3"
-dependencies = [
- "aes",
- "anyhow",
- "aquamarine",
- "ark-bn254 0.6.0",
- "ark-ec 0.6.0",
- "ark-ff 0.6.0",
- "ark-serialize 0.6.0",
- "arrayvec",
- "async-trait",
- "babyjubjub-ec",
- "bigdecimal",
- "blake3",
- "chacha20",
- "chrono",
- "cipher",
- "const-hex",
- "ctr",
- "curve25519-dalek 5.0.0",
- "digest 0.11.3",
- "ed25519-dalek 3.0.0",
- "elliptic-curve 0.14.1",
- "float-cmp",
- "hash2curve",
- "hex-literal",
- "hybrid-array",
- "k256 0.14.0",
- "lazy_static",
- "libp2p-identity",
- "multiaddr",
- "num_enum",
- "poly1305",
- "primitive-types 0.14.0",
- "rand 0.10.2",
- "rayon",
- "regex",
- "rlp 0.6.1",
- "secp256k1 0.31.1",
- "serde",
- "serde_with",
- "sha2 0.11.0",
- "sha3 0.12.0",
- "smart-default",
- "strum",
- "subtle",
- "thiserror 2.0.20",
- "tracing",
- "typenum",
- "zeroize",
 ]
 
 [[package]]
@@ -3475,7 +3419,7 @@ dependencies = [
  "futures-time",
  "hickory-resolver",
  "hopr-api",
- "hopr-types 4.0.0",
+ "hopr-types",
  "indexmap 2.14.0",
  "lazy_static",
  "libc",

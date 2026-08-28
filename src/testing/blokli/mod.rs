@@ -7,7 +7,6 @@ pub use hopr_api::chain::ChainInfo;
 use hopr_api::{
     chain::{DeployedSafe, ServiceEntry, ServiceRegistryConfig, ServiceType, ServiceTypeConfig},
     types::{
-        chain::{ParsedHoprChainAction, contract_addresses_for_network},
         crypto::{
             prelude::{Keypair, OffchainKeypair},
             types::Hash,
@@ -16,6 +15,7 @@ use hopr_api::{
         primitive::prelude::*,
     },
 };
+use hopr_types::chain::{ParsedHoprChainAction, contract_addresses_for_network};
 
 /// Allows easily building the [`BlokliTestState`] using the HOPR native types.
 #[derive(Clone)]
