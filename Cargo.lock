@@ -1557,9 +1557,9 @@ dependencies = [
 
 [[package]]
 name = "blokli-client"
-version = "0.32.1"
+version = "0.33.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f2eed63aec778288cd2fa8aaf9537687e0b5a7d2eae53f7b0360e05fc02134db"
+checksum = "b841703b39a44da4578c39433f770631f6405a89dfd33451ff041b16cf096ea4"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -3343,9 +3343,9 @@ dependencies = [
 
 [[package]]
 name = "hopr-types"
-version = "4.0.0"
+version = "4.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1998a31a5fec199e2e51cb6c79804934a49d72a10c54714208ce17fa42e73af0"
+checksum = "c46c3109d786f2688fa712240720a0ada428d99382eb2b76a996ee7ea33ba188"
 dependencies = [
  "aes",
  "anyhow",
@@ -3404,7 +3404,7 @@ dependencies = [
 
 [[package]]
 name = "hopr-utilities"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "anyhow",
  "arrayvec",
