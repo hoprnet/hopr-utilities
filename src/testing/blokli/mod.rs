@@ -497,4 +497,204 @@ mod tests {
         assert_eq!(state.service_registry_config.type_registration_fee, "1 wxHOPR");
         assert!(state.services.is_empty());
     }
+
+    /// Withdrawal attribution in [`FullStateEmulator`].
+    ///
+    /// A `SafePayloadGenerator` transfer is signed by the node key but executed by the Safe through
+    /// `execTransactionFromModule`, so the *Safe's* balance moves. A `BasicPayloadGenerator`
+    /// transfer of the same amount, to the same destination, signed by the same key, moves the
+    /// node's own. Nothing in the decoded action distinguishes them except the payer, which is what
+    /// these tests pin down.
+    mod withdrawal_payer {
+        use blokli_client::api::{BlokliQueryClient, BlokliTransactionClient, types::Token};
+        use hopr_api::types::{
+            chain::{
+                ContractAddresses,
+                payload::{BasicPayloadGenerator, PayloadGenerator, SafePayloadGenerator, SignableTransaction},
+            },
+            crypto::prelude::ChainKeypair,
+        };
+
+        use super::*;
+
+        const NETWORK: &str = "piz-palu-staging";
+        const MODULE: [u8; Address::SIZE] = [0x11u8; Address::SIZE];
+        const DEST: [u8; Address::SIZE] = [0xdeu8; Address::SIZE];
+
+        /// Enough to cover `EMULATED_TX_PRICE`, which the emulator charges the *signer* whichever
+        /// account ends up paying the value.
+        fn node_gas() -> XDaiBalance {
+            XDaiBalance::new_base(1)
+        }
+
+        fn safe_hopr() -> HoprBalance {
+            HoprBalance::new_base(1000)
+        }
+
+        fn safe_xdai() -> XDaiBalance {
+            XDaiBalance::new_base(500)
+        }
+
+        fn amount() -> HoprBalance {
+            HoprBalance::new_base(40)
+        }
+
+        struct Fixture {
+            client: BlokliTestClient<FullStateEmulator>,
+            node_key: ChainKeypair,
+            node: Address,
+            safe: Address,
+        }
+
+        /// A node whose Safe is a *different* account, so the two can be told apart. The node holds
+        /// only gas; the Safe holds the wxHOPR and the xDai being moved.
+        fn fixture() -> Fixture {
+            let node_key = ChainKeypair::random();
+            let node = node_key.public().to_address();
+            let safe: Address = [0x5au8; Address::SIZE].into();
+            let dest: Address = DEST.into();
+
+            let client = BlokliTestStateBuilder::default()
+                .with_hopr_network_chain_info(NETWORK)
+                .with_accounts([(
+                    AccountEntry {
+                        public_key: *OffchainKeypair::random().public(),
+                        chain_addr: node,
+                        entry_type: AccountType::NotAnnounced,
+                        safe_address: Some(safe),
+                        key_id: 0u32.into(),
+                    },
+                    safe_hopr(),
+                    node_gas(),
+                )])
+                // `with_accounts` leaves the Safe with no xDai, which is the shape of a real
+                // deployment. The native case needs some to move.
+                .with_balances([(safe, safe_xdai())])
+                // Both entries must exist up front or the balance queries fail outright.
+                .with_balances([(dest, HoprBalance::zero())])
+                .with_balances([(dest, XDaiBalance::zero())])
+                .build_dynamic_client(MODULE.into());
+
+            Fixture {
+                client,
+                node_key,
+                node,
+                safe,
+            }
+        }
+
+        impl Fixture {
+            async fn hopr(&self, address: Address) -> anyhow::Result<HoprBalance> {
+                Ok(self
+                    .client
+                    .query_token_balance(&address.into(), Token::WxHOPR)
+                    .await?
+                    .balance
+                    .0
+                    .parse()?)
+            }
+
+            async fn xdai(&self, address: Address) -> anyhow::Result<XDaiBalance> {
+                Ok(self
+                    .client
+                    .query_native_balance(&address.into())
+                    .await?
+                    .balance
+                    .0
+                    .parse()?)
+            }
+
+            async fn submit(&self, signed: &[u8]) -> anyhow::Result<()> {
+                self.client.submit_and_confirm_transaction(signed, 1).await?;
+                Ok(())
+            }
+
+            fn contracts(&self) -> ContractAddresses {
+                contract_addresses_for_network(NETWORK)
+                    .expect("network name not found")
+                    .1
+            }
+        }
+
+        /// The regression test for the defect: a Safe-executed token transfer must come out of the
+        /// Safe. Before the payer was carried, this debited the node and silently passed.
+        #[tokio::test]
+        async fn safe_executed_token_withdrawal_debits_the_safe() -> anyhow::Result<()> {
+            let f = fixture();
+            let dest: Address = DEST.into();
+
+            let signed = SafePayloadGenerator::new(&f.node_key, f.contracts(), MODULE.into())
+                .transfer(dest, amount())?
+                .sign_and_encode_to_eip2718(0, 1, None, &f.node_key)
+                .await?;
+            f.submit(&signed).await?;
+
+            assert_eq!(f.hopr(f.safe).await?, safe_hopr() - amount(), "the Safe must pay");
+            assert_eq!(f.hopr(dest).await?, amount(), "the destination must be credited");
+            assert!(
+                f.hopr(f.node).await?.is_zero(),
+                "the signing node holds no wxHOPR and must not have been drawn on"
+            );
+            Ok(())
+        }
+
+        /// The xDai half, which needs `get_account_safe_native_balance_mut` — the token helper
+        /// cannot reach a Safe's native balance.
+        #[tokio::test]
+        async fn safe_executed_native_withdrawal_debits_the_safe() -> anyhow::Result<()> {
+            let f = fixture();
+            let dest: Address = DEST.into();
+            let moved = XDaiBalance::new_base(7);
+
+            let signed = SafePayloadGenerator::new(&f.node_key, f.contracts(), MODULE.into())
+                .transfer(dest, moved)?
+                .sign_and_encode_to_eip2718(0, 1, None, &f.node_key)
+                .await?;
+            f.submit(&signed).await?;
+
+            assert_eq!(f.xdai(f.safe).await?, safe_xdai() - moved, "the Safe must pay");
+            assert_eq!(f.xdai(dest).await?, moved, "the destination must be credited");
+            assert!(
+                f.xdai(f.node).await? < node_gas(),
+                "the signer still pays the transaction fee out of its own xDai"
+            );
+            Ok(())
+        }
+
+        /// The control: same signer, same destination, same amount — only the generator differs, so
+        /// only the payer differs. Without this the two tests above would also pass if every
+        /// withdrawal were attributed to the Safe.
+        #[tokio::test]
+        async fn eoa_withdrawal_debits_the_signer_not_the_safe() -> anyhow::Result<()> {
+            let f = fixture();
+            let dest: Address = DEST.into();
+            // `with_accounts` gives the node no wxHOPR, so credit it directly: this transfer is
+            // the node's own to pay for.
+            let funded = HoprBalance::new_base(100);
+            f.client.hidden_state_update(|state| {
+                state.token_balances.insert(
+                    const_hex::encode(f.node),
+                    blokli_client::api::types::HoprBalance {
+                        __typename: "HoprBalance".to_string(),
+                        balance: blokli_client::api::types::TokenValueString(funded.to_string()),
+                    },
+                );
+            });
+
+            let signed = BasicPayloadGenerator::new(f.node, f.contracts())
+                .transfer(dest, amount())?
+                .sign_and_encode_to_eip2718(0, 1, None, &f.node_key)
+                .await?;
+            f.submit(&signed).await?;
+
+            assert_eq!(f.hopr(f.node).await?, funded - amount(), "the signer must pay");
+            assert_eq!(f.hopr(dest).await?, amount(), "the destination must be credited");
+            assert_eq!(
+                f.hopr(f.safe).await?,
+                safe_hopr(),
+                "the Safe must be untouched by an EOA transfer"
+            );
+            Ok(())
+        }
+    }
 }
