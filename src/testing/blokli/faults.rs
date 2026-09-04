@@ -117,6 +117,10 @@ pub struct ChainFaults {
     /// does in parallel, not just what it eventually achieves.
     in_flight: DashMap<ChainOp, usize>,
     peak_in_flight: DashMap<ChainOp, usize>,
+    /// Total outstanding writes across all kinds, tracked directly rather than summed from
+    /// `in_flight` on read — a concurrent `leave_in_flight` racing that sum would let two
+    /// simultaneously outstanding writes each observe a total of 1, under-reporting the peak.
+    in_flight_total: std::sync::atomic::AtomicUsize,
     peak_in_flight_total: std::sync::atomic::AtomicUsize,
 }
 
@@ -182,7 +186,7 @@ impl ChainFaults {
             .and_modify(|peak| *peak = (*peak).max(outstanding))
             .or_insert(outstanding);
 
-        let total: usize = self.in_flight.iter().map(|entry| *entry.value()).sum();
+        let total = self.in_flight_total.fetch_add(1, Ordering::Relaxed) + 1;
         self.peak_in_flight_total.fetch_max(total, Ordering::Relaxed);
 
         InFlightGuard {
@@ -196,6 +200,9 @@ impl ChainFaults {
         if let Some(mut outstanding) = self.in_flight.get_mut(&op) {
             *outstanding = outstanding.saturating_sub(1);
         }
+        let _ = self
+            .in_flight_total
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |t| Some(t.saturating_sub(1)));
     }
 
     fn fault(&self, op: ChainOp) -> Fault {

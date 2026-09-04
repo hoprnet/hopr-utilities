@@ -137,6 +137,10 @@ impl<C> TestChainConnector<C>
 where
     C: BlokliQueryClient + BlokliSubscriptionClient + BlokliTransactionClient + Clone + Send + Sync + 'static,
 {
+    /// Creates a disconnected connector over `client`.
+    ///
+    /// Call [`TestChainConnector::connect`] before any read operation; before that, chain info,
+    /// ticket values, and the payload generator are unset.
     pub fn new(
         client: C,
         my_addr: Address,
@@ -594,16 +598,9 @@ where
         let signer = signer.clone();
 
         Ok(Box::pin(async move {
-            let n = nonce.fetch_add(1, Ordering::Relaxed);
-            let signed = tx_req
-                .sign_and_encode_to_eip2718(n, chain_id, None, &signer)
+            Self::send_tx(&client, tx_req, chain_id, &signer, &nonce)
                 .await
-                .map_err(|e| TestConnectorError::from(anyhow::anyhow!("{e}")))?;
-            let receipt = client
-                .submit_and_confirm_transaction(&signed, 1)
-                .await
-                .map_err(TestConnectorError::from)?;
-            Ok(hopr_api::chain::ChainReceipt::from(receipt))
+                .map_err(TestConnectorError::from)
         }))
     }
 
