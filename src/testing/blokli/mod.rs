@@ -1,8 +1,15 @@
+mod connector;
 mod emulator;
+mod faults;
 
-use blokli_client::BlokliTestStateMutator;
-pub use blokli_client::{BlokliTestClient, BlokliTestState, exports::Entry};
+pub use blokli_client::{
+    BlokliTestClient, BlokliTestState, BlokliTestStateMutator, BlokliTestStateSnapshot, exports::Entry,
+};
+pub use connector::{
+    NoopKeyMapper, TestChainConnector, TestConnectorError, create_test_blokli_connector, register_test_safe,
+};
 pub use emulator::{ChainMutator, FullStateEmulator, StaticState};
+pub use faults::{ChainFaults, ChainOp, EventKind, Fault, InFlightGuard};
 pub use hopr_api::chain::ChainInfo;
 use hopr_api::{
     chain::{DeployedSafe, ServiceEntry, ServiceRegistryConfig, ServiceType, ServiceTypeConfig},

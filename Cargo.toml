@@ -11,7 +11,7 @@ name         = "hopr-utilities"
 readme       = "README.md"
 repository   = "https://github.com/hoprnet/hopr-utilities"
 rust-version = "1.97"
-version      = "0.13.0"
+version      = "0.14.0"
 
 [lints.rust]
 # `tokio_unstable` gates the cooperative-yield (`tokio::task::coop`) code paths; declare it so the
@@ -73,15 +73,21 @@ statistics-types-weighted = ["dep:rand", "statistics-types"]
 platform              = ["dep:thiserror"]
 platform-trace-timing = ["dep:tracing", "platform"]
 
-# Blokli testing utilities (emulator)
+# Blokli testing utilities (emulator + chain connector)
 testing-blokli = [
   "blokli-client/serde",
   "blokli-client/testing",
   "dep:anyhow",
+  "dep:async-broadcast",
+  "dep:async-trait",
   "dep:blokli-client",
+  "dep:dashmap",
+  "dep:futures-time",
   "dep:hopr-api",
   "dep:hopr-types",
+  "dep:thiserror",
   "dep:tracing",
+  "runtime-tokio",
 ]
 
 [dependencies]
@@ -95,6 +101,11 @@ indexmap      = { workspace = true }
 tokio         = { workspace = true, optional = true, features = ["sync", "time"] }
 
 crossfire = { workspace = true, optional = true }
+
+# testing-blokli (chain connector)
+async-broadcast = { workspace = true, optional = true }
+async-trait     = { workspace = true, optional = true }
+dashmap         = { workspace = true, optional = true, features = ["inline"] }
 
 # network-types
 arrayvec         = { workspace = true, optional = true }
@@ -157,10 +168,13 @@ resolver = "3"
 anyhow = "1.0.104"
 arrayvec = "0.7.8"
 assertables = "10.1.0"
+async-broadcast = "0.7.2"
 async-lock = "3.4.2"
+async-trait = "0.1.92"
 auto_impl = "1.3.0"
 blokli-client = "0.33.1"
 crossfire = { version = "3.1.19", default-features = false }
+dashmap = "6.2.1"
 flume = { version = "0.12.0", default-features = false, features = ["async"] }
 futures = { version = "0.3.34", default-features = false, features = [
   "async-await",
@@ -203,5 +217,9 @@ tokio-util = { version = "0.7.19", default-features = false, features = [
 tracing = { version = "0.1.44", features = ["release_max_level_debug"] }
 
 # --- HOPR crates (crates.io) ---
-hopr-api   = { version = "4.1.0", features = ["chain"] }
+hopr-api = { version = "4.1.0", features = [
+  "node",
+  "types-internal",
+  "types-with-bindings",
+] }
 hopr-types = { version = "4.0.1", features = ["use-bindings"] }
