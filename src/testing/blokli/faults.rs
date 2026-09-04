@@ -224,11 +224,7 @@ impl ChainFaults {
     /// Applies a `Fail`/`Hang` fault to an async operation, if one is set.
     pub(super) async fn gate(&self, op: ChainOp) -> Result<(), TestConnectorError> {
         self.record(op);
-        match self.fault(op) {
-            Fault::None => Ok(()),
-            Fault::Fail => Err(injected_fault(op)),
-            Fault::Hang => futures::future::pending().await,
-        }
+        Self::resolve(self.fault(op), op).await
     }
 
     /// Applies a fault to a stream-returning operation: `Fail` errors from the
@@ -243,7 +239,13 @@ impl ChainFaults {
 
     /// Resolves the confirmation future of write op `op`.
     pub(super) async fn confirm(&self, op: ChainOp) -> Result<(), TestConnectorError> {
-        match self.confirmation_fault(op) {
+        Self::resolve(self.confirmation_fault(op), op).await
+    }
+
+    /// Shared resolution logic for [`ChainFaults::gate`] and [`ChainFaults::confirm`]: both apply
+    /// the same three fault behaviours, just reading from a different fault map.
+    async fn resolve(fault: Fault, op: ChainOp) -> Result<(), TestConnectorError> {
+        match fault {
             Fault::None => Ok(()),
             Fault::Fail => Err(injected_fault(op)),
             Fault::Hang => futures::future::pending().await,

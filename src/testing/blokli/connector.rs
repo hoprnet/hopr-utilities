@@ -112,13 +112,13 @@ pub struct TestChainConnector<C> {
     module_address: Address,
     events: TestEventsChannel,
     /// Payload generator, initialized on `connect()` after fetching chain info.
-    payload_gen: Arc<OnceLock<hopr_api::types::chain::payload::SafePayloadGenerator>>,
+    payload_gen: OnceLock<hopr_api::types::chain::payload::SafePayloadGenerator>,
     /// chain_id, initialized on `connect()`.
-    chain_id: Arc<OnceLock<u64>>,
+    chain_id: OnceLock<u64>,
     /// Ticket price from chain info, populated on `connect()` for synchronous access.
-    ticket_price: Arc<OnceLock<HoprBalance>>,
+    ticket_price: OnceLock<HoprBalance>,
     /// Minimum winning probability from chain info, populated on `connect()` for synchronous access.
-    ticket_win_prob: Arc<OnceLock<WinningProbability>>,
+    ticket_win_prob: OnceLock<WinningProbability>,
     /// Nonce counters for transaction sequencing, one per signing address.
     ///
     /// Keyed by signer because `withdraw_from_signer` signs with a caller-supplied key: a
@@ -186,10 +186,12 @@ where
     pub async fn connect(&mut self) -> anyhow::Result<()> {
         // Fetch chain info to initialize the payload generator and cache ticket values.
         let chain_info_raw = self.client.query_chain_info().await?;
-        let chain_id = chain_info_raw.chain_id as u64;
-        let contract_addresses: hopr_api::types::chain::ContractAddresses =
-            serde_json::from_str(&chain_info_raw.contract_addresses.0)
-                .map_err(|e| anyhow::anyhow!("invalid contract addresses: {e}"))?;
+        let parsed = Self::parse_chain_info_model(chain_info_raw)?;
+        let hopr_api::chain::ChainInfo {
+            chain_id,
+            contract_addresses,
+            ..
+        } = parsed.chain_info;
         let _ = self.chain_id.set(chain_id);
         let _ = self
             .payload_gen
@@ -198,7 +200,6 @@ where
                 contract_addresses,
                 self.module_address,
             ));
-        let parsed = Self::parse_chain_info_model(chain_info_raw)?;
         let _ = self.ticket_price.set(parsed.ticket_price);
         let _ = self.ticket_win_prob.set(parsed.ticket_win_prob);
 
@@ -489,6 +490,72 @@ where
             .copied()
             .ok_or_else(|| anyhow::anyhow!("connector not connected"))
     }
+
+    /// Fetches and parses live chain info.
+    ///
+    /// Deliberately not cached: some tests mutate the emulated chain's `chain_info` mid-run (e.g.
+    /// to simulate a chain that starts returning unparseable data), and every [`ChainValues`]
+    /// getter built on this must observe that change on its next call.
+    ///
+    /// [`ChainValues`]: hopr_api::chain::ChainValues
+    async fn fetch_parsed_chain_info(&self) -> anyhow::Result<ParsedChainInfo> {
+        let model = self.client.query_chain_info().await?;
+        Self::parse_chain_info_model(model)
+    }
+
+    /// Shared body of [`ChainWriteAccountOperations::withdraw`] and `::withdraw_from_signer`:
+    /// builds and submits a transfer signed by `signer`, using that signer's own nonce sequence.
+    ///
+    /// [`ChainWriteAccountOperations::withdraw`]: hopr_api::chain::ChainWriteAccountOperations::withdraw
+    fn withdraw_as<'a, Cur: hopr_api::types::primitive::prelude::Currency + Send>(
+        &'a self,
+        signer: &hopr_api::types::crypto::prelude::ChainKeypair,
+        balance: hopr_api::types::primitive::prelude::Balance<Cur>,
+        recipient: &Address,
+    ) -> Result<
+        futures::future::BoxFuture<'a, Result<hopr_api::chain::ChainReceipt, TestConnectorError>>,
+        TestConnectorError,
+    > {
+        let tx_req = self
+            .payload_gen()
+            .map_err(TestConnectorError::from)?
+            .transfer(*recipient, balance)
+            .map_err(|e| TestConnectorError::from(anyhow::anyhow!("{e}")))?;
+
+        let client = self.client.clone();
+        let chain_id = self.chain_id().map_err(TestConnectorError::from)?;
+        let nonce = self.nonce_for(&signer.public().to_address());
+        let signer = signer.clone();
+
+        Ok(Box::pin(async move {
+            Self::send_tx(&client, tx_req, chain_id, &signer, &nonce)
+                .await
+                .map_err(TestConnectorError::from)
+        }))
+    }
+
+    /// Shared tail of [`ChainWriteChannelOperations`]'s three write methods: waits for this
+    /// connector's own view to reflect the just-submitted change, then resolves any injected
+    /// confirmation fault before yielding `receipt`.
+    ///
+    /// [`ChainWriteChannelOperations`]: hopr_api::chain::ChainWriteChannelOperations
+    fn track_confirmation<'a>(
+        &'a self,
+        op: ChainOp,
+        channel_id: ChannelId,
+        receipt: hopr_api::chain::ChainReceipt,
+        predicate: impl Fn(&hopr_api::types::internal::prelude::ChannelEntry) -> bool + Send + 'static,
+    ) -> futures::future::BoxFuture<'a, Result<hopr_api::chain::ChainReceipt, TestConnectorError>> {
+        let faults = self.faults.clone();
+        let channels = self.channels.clone();
+        let in_flight = faults.enter_in_flight(op);
+        Box::pin(async move {
+            let _in_flight = in_flight;
+            Self::await_own_view(channels, channel_id, predicate).await;
+            faults.confirm(op).await?;
+            Ok(receipt)
+        })
+    }
 }
 
 // ── ChainReadAccountOperations ────────────────────────────────────────────────
@@ -561,22 +628,7 @@ where
         balance: hopr_api::types::primitive::prelude::Balance<Cur>,
         recipient: &Address,
     ) -> Result<futures::future::BoxFuture<'_, Result<hopr_api::chain::ChainReceipt, Self::Error>>, Self::Error> {
-        let tx_req = self
-            .payload_gen()
-            .map_err(TestConnectorError::from)?
-            .transfer(*recipient, balance)
-            .map_err(|e| TestConnectorError::from(anyhow::anyhow!("{e}")))?;
-
-        let client = self.client.clone();
-        let chain_id = self.chain_id().map_err(TestConnectorError::from)?;
-        let chain_key = self.chain_key.clone();
-        let nonce = self.nonce_for(&self.my_addr);
-
-        Ok(Box::pin(async move {
-            Self::send_tx(&client, tx_req, chain_id, &chain_key, &nonce)
-                .await
-                .map_err(TestConnectorError::from)
-        }))
+        self.withdraw_as(&self.chain_key, balance, recipient)
     }
 
     async fn withdraw_from_signer<Cur: hopr_api::types::primitive::prelude::Currency + Send>(
@@ -585,23 +637,7 @@ where
         balance: hopr_api::types::primitive::prelude::Balance<Cur>,
         recipient: &Address,
     ) -> Result<futures::future::BoxFuture<'_, Result<hopr_api::chain::ChainReceipt, Self::Error>>, Self::Error> {
-        let tx_req = self
-            .payload_gen()
-            .map_err(TestConnectorError::from)?
-            .transfer(*recipient, balance)
-            .map_err(|e| TestConnectorError::from(anyhow::anyhow!("{e}")))?;
-
-        let client = self.client.clone();
-        let chain_id = self.chain_id().map_err(TestConnectorError::from)?;
-        // The caller's key signs this one, so it needs that key's own nonce sequence.
-        let nonce = self.nonce_for(&signer.public().to_address());
-        let signer = signer.clone();
-
-        Ok(Box::pin(async move {
-            Self::send_tx(&client, tx_req, chain_id, &signer, &nonce)
-                .await
-                .map_err(TestConnectorError::from)
-        }))
+        self.withdraw_as(signer, balance, recipient)
     }
 
     async fn register_safe(
@@ -805,15 +841,11 @@ where
         )
         .await
         .map_err(TestConnectorError::from)?;
-        let faults = self.faults.clone();
-        let channels = self.channels.clone();
-        let in_flight = faults.enter_in_flight(ChainOp::OpenChannel);
-        Ok(Box::pin(async move {
-            let _in_flight = in_flight;
-            Self::await_own_view(channels, channel_id, |channel| channel.status == ChannelStatus::Open).await;
-            faults.confirm(ChainOp::OpenChannel).await?;
-            Ok(receipt)
-        }))
+        Ok(
+            self.track_confirmation(ChainOp::OpenChannel, channel_id, receipt, |channel| {
+                channel.status == ChannelStatus::Open
+            }),
+        )
     }
 
     async fn fund_channel<'a>(
@@ -840,16 +872,11 @@ where
         )
         .await
         .map_err(TestConnectorError::from)?;
-        let faults = self.faults.clone();
-        let channels = self.channels.clone();
-        let channel_id = *channel_id;
-        let in_flight = faults.enter_in_flight(ChainOp::FundChannel);
-        Ok(Box::pin(async move {
-            let _in_flight = in_flight;
-            Self::await_own_view(channels, channel_id, |channel| channel.balance >= funded_to).await;
-            faults.confirm(ChainOp::FundChannel).await?;
-            Ok(receipt)
-        }))
+        Ok(
+            self.track_confirmation(ChainOp::FundChannel, *channel_id, receipt, move |channel| {
+                channel.balance >= funded_to
+            }),
+        )
     }
 
     async fn close_channel<'a>(
@@ -884,19 +911,13 @@ where
         )
         .await
         .map_err(TestConnectorError::from)?;
-        let faults = self.faults.clone();
-        let channels = self.channels.clone();
-        let channel_id = *channel_id;
-        let in_flight = faults.enter_in_flight(ChainOp::CloseChannel);
-        Ok(Box::pin(async move {
-            let _in_flight = in_flight;
-            // Closure is two steps (Open → PendingToClose → Closed); either way
-            // the status this call moved the channel out of must be gone from
-            // our own view before we report success.
-            Self::await_own_view(channels, channel_id, |channel| channel.status != previous_status).await;
-            faults.confirm(ChainOp::CloseChannel).await?;
-            Ok(receipt)
-        }))
+        // Closure is two steps (Open → PendingToClose → Closed); either way the status this call
+        // moved the channel out of must be gone from our own view before we report success.
+        Ok(
+            self.track_confirmation(ChainOp::CloseChannel, *channel_id, receipt, move |channel| {
+                channel.status != previous_status
+            }),
+        )
     }
 }
 
@@ -1115,22 +1136,19 @@ where
     }
 
     async fn domain_separators(&self) -> Result<hopr_api::chain::DomainSeparators, Self::Error> {
-        let info = self.client.query_chain_info().await?;
-        Ok(Self::parse_chain_info_model(info)?.domain_separators)
+        Ok(self.fetch_parsed_chain_info().await?.domain_separators)
     }
 
     async fn minimum_incoming_ticket_win_prob(&self) -> Result<WinningProbability, Self::Error> {
         self.faults.gate(ChainOp::WinProb).await?;
 
-        let info = self.client.query_chain_info().await?;
-        Ok(Self::parse_chain_info_model(info)?.ticket_win_prob)
+        Ok(self.fetch_parsed_chain_info().await?.ticket_win_prob)
     }
 
     async fn minimum_ticket_price(&self) -> Result<HoprBalance, Self::Error> {
         self.faults.gate(ChainOp::TicketPrice).await?;
 
-        let info = self.client.query_chain_info().await?;
-        Ok(Self::parse_chain_info_model(info)?.ticket_price)
+        Ok(self.fetch_parsed_chain_info().await?.ticket_price)
     }
 
     async fn key_binding_fee(&self) -> Result<HoprBalance, Self::Error> {
@@ -1142,13 +1160,11 @@ where
     }
 
     async fn channel_closure_notice_period(&self) -> Result<std::time::Duration, Self::Error> {
-        let info = self.client.query_chain_info().await?;
-        Ok(Self::parse_chain_info_model(info)?.closure_grace_period)
+        Ok(self.fetch_parsed_chain_info().await?.closure_grace_period)
     }
 
     async fn chain_info(&self) -> Result<hopr_api::chain::ChainInfo, Self::Error> {
-        let info = self.client.query_chain_info().await?;
-        Ok(Self::parse_chain_info_model(info)?.chain_info)
+        Ok(self.fetch_parsed_chain_info().await?.chain_info)
     }
 
     async fn redemption_stats<A: Into<Address> + Send>(
