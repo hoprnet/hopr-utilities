@@ -173,7 +173,7 @@ async-lock = "3.4.2"
 async-trait = "0.1.92"
 auto_impl = "1.3.0"
 blokli-client = "0.33.1"
-crossfire = { version = "3.1.19", default-features = false }
+crossfire = { version = "3.1.20", default-features = false }
 dashmap = "6.2.1"
 flume = { version = "0.12.0", default-features = false, features = ["async"] }
 futures = { version = "0.3.34", default-features = false, features = [
@@ -181,19 +181,19 @@ futures = { version = "0.3.34", default-features = false, features = [
   "std",
 ] }
 futures-time = "3.1.0"
-hickory-resolver = { version = "0.26.1", default-features = false, features = [
+hickory-resolver = { version = "0.26.2", default-features = false, features = [
   "system-config",
 ] }
-indexmap = "2.14.0"
+indexmap = "2.14.2"
 lazy_static = "1.5.0"
-libc = "0.2"
-libp2p-identity = { version = "0.2.14", features = [
+libc = "0.2.189"
+libp2p-identity = { version = "0.3.0", features = [
   "ed25519",
   "peerid",
   "rand",
 ] }
-multiaddr = "0.18.2"
-parameterized = "2.0.0"
+multiaddr = "0.19.0"
+parameterized = "2.1.0"
 pcap-file = "2.0.0"
 pin-project = "1.1.13"
 rand = { version = "0.10.2", features = ["thread_rng"] }
@@ -217,7 +217,7 @@ tokio-util = { version = "0.7.19", default-features = false, features = [
 tracing = { version = "0.1.44", features = ["release_max_level_debug"] }
 
 # --- HOPR crates (crates.io) ---
-hopr-api = { version = "4.1.0", features = [
+hopr-api = { version = "4.3.0", features = [
   "node",
   "types-internal",
   "types-with-bindings",
