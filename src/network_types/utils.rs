@@ -138,28 +138,7 @@ mod tokio_utils {
         A: AsyncRead + AsyncWrite + Unpin + ?Sized,
         B: AsyncRead + AsyncWrite + Unpin + ?Sized,
     {
-        tracing::debug!(
-            egress_buffer = max_buffer,
-            ingress_buffer = max_buffer,
-            "session buffers"
-        );
-
-        if let Some(abort_stream) = abort_stream {
-            // We only allow aborting from the "stream" side, not from the "session" side.
-            let (_, dummy) = AbortHandle::new_pair();
-            copy_duplex_abortable(a, b, (max_buffer, max_buffer), (dummy, abort_stream))
-                .await
-                .map(|(a, b)| (a as usize, b as usize))
-        } else {
-            copy_duplex(a, b, (max_buffer, max_buffer))
-                .await
-                .map(|(a, b)| (a as usize, b as usize))
-        }
-    }
-
-    /// An [`AbortRegistration`] that never fires — for a side of a transfer that cannot be aborted.
-    fn never_aborts() -> AbortRegistration {
-        AbortHandle::new_pair().1
+        transfer_session_inner(a, b, max_buffer, abort_stream, false).await
     }
 
     /// Datagram-boundary-preserving variant of [`transfer_session`] for UDP session bridges.
@@ -185,17 +164,31 @@ mod tokio_utils {
         A: AsyncRead + AsyncWrite + Unpin + ?Sized,
         B: AsyncRead + AsyncWrite + Unpin + ?Sized,
     {
-        tracing::debug!(
-            egress_buffer = max_buffer,
-            ingress_buffer = max_buffer,
-            "session buffers (datagram-aware)"
-        );
+        transfer_session_inner(a, b, max_buffer, abort_stream, true).await
+    }
 
-        // `a` is the session, `b` is the (UDP-like) stream. Only the "stream" side may abort (like
-        // `transfer_session`); the "session" side never aborts. Preserve datagram boundaries on both
-        // directions — a UDP bridge maps one datagram to one session frame each way.
+    /// An [`AbortRegistration`] that never fires — for a side of a transfer that cannot be aborted.
+    fn never_aborts() -> AbortRegistration {
+        AbortHandle::new_pair().1
+    }
+
+    /// Shared body of [`transfer_session`] / [`transfer_session_datagram`]. Only the "stream" side
+    /// (`b`) may abort; the "session" side (`a`) never does. `datagram` preserves datagram
+    /// boundaries on both directions (see [`transfer_session_datagram`]).
+    async fn transfer_session_inner<A, B>(
+        a: &mut A,
+        b: &mut B,
+        max_buffer: usize,
+        abort_stream: Option<AbortRegistration>,
+        datagram: bool,
+    ) -> std::io::Result<(usize, usize)>
+    where
+        A: AsyncRead + AsyncWrite + Unpin + ?Sized,
+        B: AsyncRead + AsyncWrite + Unpin + ?Sized,
+    {
+        tracing::debug!(egress_buffer = max_buffer, ingress_buffer = max_buffer, datagram, "session buffers");
         let b_abort = abort_stream.unwrap_or_else(never_aborts);
-        copy_duplex_abortable_with_datagram(a, b, (max_buffer, max_buffer), true, (never_aborts(), b_abort))
+        copy_duplex_abortable_with_datagram(a, b, (max_buffer, max_buffer), datagram, (never_aborts(), b_abort))
             .await
             .map(|(a, b)| (a as usize, b as usize))
     }
@@ -830,54 +823,43 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "runtime-tokio")]
-    fn recording_session() -> RecordingSession {
-        RecordingSession {
-            writes: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
-            pending_once: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
-        }
-    }
-
-    #[cfg(feature = "runtime-tokio")]
-    fn datagram_source() -> DatagramSource {
-        DatagramSource {
-            datagrams: [vec![1u8; 1000], vec![2u8; 1000], vec![3u8; 800]].into_iter().collect(),
-        }
-    }
-
-    /// Runs the three datagrams (1000/1000/800) through a once-backpressured session and returns the
-    /// recorded session-write lengths — via the datagram-aware transfer or the plain byte-stream one.
-    #[cfg(feature = "runtime-tokio")]
-    async fn recorded_writes(datagram: bool) -> anyhow::Result<Vec<usize>> {
-        let mut session = recording_session();
-        let mut stream = datagram_source();
-        if datagram {
-            transfer_session_datagram(&mut session, &mut stream, 16384, None).await?;
-        } else {
-            transfer_session(&mut session, &mut stream, 16384, None).await?;
-        }
-        Ok(session.writes.lock().unwrap().clone())
-    }
-
-    /// Datagram mode must write each received datagram to the session as its own write, even when
-    /// the session write is backpressured — no coalescing across datagrams.
+    /// Ingress (stream -> session): datagram mode writes each received datagram to the session as its
+    /// own write, even when the session write is backpressured once — no coalescing across datagrams.
     #[cfg(feature = "runtime-tokio")]
     #[tokio::test(flavor = "multi_thread")]
     async fn datagram_mode_preserves_boundaries_under_backpressure() -> anyhow::Result<()> {
+        let writes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut session = RecordingSession {
+            writes: writes.clone(),
+            pending_once: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        };
+        let mut stream = DatagramSource {
+            datagrams: [vec![1u8; 1000], vec![2u8; 1000], vec![3u8; 800]].into_iter().collect(),
+        };
+        transfer_session_datagram(&mut session, &mut stream, 16384, None).await?;
         assert_eq!(
-            recorded_writes(true).await?,
+            *writes.lock().unwrap(),
             vec![1000, 1000, 800],
             "each datagram must be written to the session separately; got a coalesced write set"
         );
         Ok(())
     }
 
-    /// Guard: the plain byte-stream `transfer_session` intentionally coalesces under backpressure
-    /// (the TCP fast path). This locks in that the datagram behavior is opt-in only.
+    /// Guard: the plain byte-stream `transfer_session` intentionally coalesces under backpressure (the
+    /// TCP fast path). This locks in that the datagram behavior is opt-in only.
     #[cfg(feature = "runtime-tokio")]
     #[tokio::test(flavor = "multi_thread")]
     async fn byte_stream_mode_still_coalesces_under_backpressure() -> anyhow::Result<()> {
-        let recorded = recorded_writes(false).await?;
+        let writes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut session = RecordingSession {
+            writes: writes.clone(),
+            pending_once: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        };
+        let mut stream = DatagramSource {
+            datagrams: [vec![1u8; 1000], vec![2u8; 1000], vec![3u8; 800]].into_iter().collect(),
+        };
+        transfer_session(&mut session, &mut stream, 16384, None).await?;
+        let recorded = writes.lock().unwrap().clone();
         assert!(
             recorded.len() < 3,
             "byte-stream copy is expected to coalesce datagrams under backpressure; got {recorded:?}"
@@ -885,18 +867,23 @@ mod tests {
         Ok(())
     }
 
-    /// Egress direction (session -> stream): datagram mode must also write each session frame to the
-    /// stream as its own write under backpressure — the leg that feeds the client's WireGuard.
+    /// Egress (session -> stream): datagram mode must also write each session frame to the stream as
+    /// its own write under backpressure — the leg that feeds the client's WireGuard. Here the session
+    /// (`a`) yields frames and the (UDP) stream (`b`) records writes and backpressures once.
     #[cfg(feature = "runtime-tokio")]
     #[tokio::test(flavor = "multi_thread")]
     async fn datagram_mode_preserves_boundaries_on_egress_under_backpressure() -> anyhow::Result<()> {
-        // Swap roles: the session (a) yields frames, the (UDP) stream (b) records writes and
-        // backpressures once. With datagram mode on both directions, a -> b must not coalesce.
-        let mut session = datagram_source();
-        let mut stream = recording_session();
+        let mut session = DatagramSource {
+            datagrams: [vec![1u8; 1000], vec![2u8; 1000], vec![3u8; 800]].into_iter().collect(),
+        };
+        let writes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut stream = RecordingSession {
+            writes: writes.clone(),
+            pending_once: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        };
         transfer_session_datagram(&mut session, &mut stream, 16384, None).await?;
         assert_eq!(
-            stream.writes.lock().unwrap().clone(),
+            *writes.lock().unwrap(),
             vec![1000, 1000, 800],
             "each session frame must be written to the stream separately on egress; got a coalesced set"
         );
