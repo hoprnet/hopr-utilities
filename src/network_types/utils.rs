@@ -186,7 +186,12 @@ mod tokio_utils {
         A: AsyncRead + AsyncWrite + Unpin + ?Sized,
         B: AsyncRead + AsyncWrite + Unpin + ?Sized,
     {
-        tracing::debug!(egress_buffer = max_buffer, ingress_buffer = max_buffer, datagram, "session buffers");
+        tracing::debug!(
+            egress_buffer = max_buffer,
+            ingress_buffer = max_buffer,
+            datagram,
+            "session buffers"
+        );
         let b_abort = abort_stream.unwrap_or_else(never_aborts);
         copy_duplex_abortable_with_datagram(a, b, (max_buffer, max_buffer), datagram, (never_aborts(), b_abort))
             .await
@@ -774,9 +779,11 @@ mod tests {
         fn poll_write(self: Pin<&mut Self>, _cx: &mut Context<'_>, buf: &[u8]) -> Poll<std::io::Result<usize>> {
             Poll::Ready(Ok(buf.len()))
         }
+
         fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
             Poll::Ready(Ok(()))
         }
+
         fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
             Poll::Ready(Ok(()))
         }
@@ -815,9 +822,11 @@ mod tests {
             self.writes.lock().unwrap().push(buf.len());
             Poll::Ready(Ok(buf.len()))
         }
+
         fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
             Poll::Ready(Ok(()))
         }
+
         fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
             Poll::Ready(Ok(()))
         }
