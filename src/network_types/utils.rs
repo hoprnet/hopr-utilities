@@ -890,6 +890,29 @@ mod tests {
         Ok(())
     }
 
+    /// Guard (egress): the plain byte-stream `transfer_session` coalesces on the session -> stream leg
+    /// too, proving datagram mode is load-bearing on the egress direction (mirror of the ingress
+    /// guard).
+    #[cfg(feature = "runtime-tokio")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn byte_stream_mode_coalesces_on_egress_under_backpressure() -> anyhow::Result<()> {
+        let mut session = DatagramSource {
+            datagrams: [vec![1u8; 1000], vec![2u8; 1000], vec![3u8; 800]].into_iter().collect(),
+        };
+        let writes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut stream = RecordingSession {
+            writes: writes.clone(),
+            pending_once: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        };
+        transfer_session(&mut session, &mut stream, 16384, None).await?;
+        let recorded = writes.lock().unwrap().clone();
+        assert!(
+            recorded.len() < 3,
+            "byte-stream copy is expected to coalesce on egress under backpressure; got {recorded:?}"
+        );
+        Ok(())
+    }
+
     #[cfg(feature = "runtime-tokio")]
     #[tokio::test]
     async fn test_async_read_streamer_complete_chunk() {
