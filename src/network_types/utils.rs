@@ -164,16 +164,17 @@ mod tokio_utils {
 
     /// Datagram-boundary-preserving variant of [`transfer_session`] for UDP session bridges.
     ///
-    /// On the `b -> a` (stream -> session) direction, each received datagram is written to the
-    /// session separately and flushed before the next datagram is read, instead of coalescing
-    /// several return-path datagrams into one oversized session write under backpressure (which the
-    /// segmenter can no longer split back apart). This preserves datagram *boundaries*; it does not
-    /// guarantee exactly one session write per datagram, since a single datagram may still span
-    /// several writes if the writer accepts partial writes. The `a -> b` (session -> stream)
-    /// direction keeps the byte-stream fast path. See hoprnet#8421.
+    /// Both directions of the bridge preserve datagram boundaries: each read (one UDP datagram from
+    /// the stream, or one reassembled frame from the session) is written to the other side
+    /// separately and flushed before the next read, instead of coalescing several reads into one
+    /// oversized write under backpressure (which the segmenter can no longer split back apart). This
+    /// preserves datagram *boundaries*; it does not guarantee exactly one write per datagram, since
+    /// a single datagram may still span several writes if the writer accepts partial writes. See
+    /// hoprnet#8421.
     ///
-    /// Precondition: `b` must yield at most one datagram per `poll_read` (as the UDP `StreamReader`
-    /// does). A reader that returns two datagrams in one read would still write them together.
+    /// Precondition: both sides must yield at most one datagram/frame per `poll_read` — the UDP
+    /// `StreamReader` and the session's frame reader both do. A reader that returned two datagrams in
+    /// one read would still write them together.
     pub async fn transfer_session_datagram<A, B>(
         a: &mut A,
         b: &mut B,
@@ -187,12 +188,12 @@ mod tokio_utils {
         tracing::debug!(
             egress_buffer = max_buffer,
             ingress_buffer = max_buffer,
-            "session buffers (datagram-aware ingress)"
+            "session buffers (datagram-aware)"
         );
 
         // `a` is the session, `b` is the (UDP-like) stream. Only the "stream" side may abort (like
-        // `transfer_session`); the "session" side never aborts. Preserve datagram boundaries on the
-        // `b -> a` (stream -> session) direction only; `a -> b` keeps the byte-stream fast path.
+        // `transfer_session`); the "session" side never aborts. Preserve datagram boundaries on both
+        // directions — a UDP bridge maps one datagram to one session frame each way.
         let b_abort = abort_stream.unwrap_or_else(never_aborts);
         copy_duplex_abortable_with_datagram(a, b, (max_buffer, max_buffer), true, (never_aborts(), b_abort))
             .await
@@ -276,23 +277,23 @@ mod tokio_utils {
         copy_duplex_abortable_with_datagram(a, b, buffer_sizes, false, aborts).await
     }
 
-    /// Variant of [`copy_duplex_abortable`] that enables datagram-boundary preservation on the
-    /// `b -> a` direction only (the return path of a UDP session bridge). When `return_datagram` is
-    /// set, that direction writes each received datagram separately and flushes it instead of
+    /// Variant of [`copy_duplex_abortable`] that enables datagram-boundary preservation on both
+    /// directions (a UDP session bridge). When `datagram` is set, each direction writes every read
+    /// (one UDP datagram, or one reassembled session frame) separately and flushes it, instead of
     /// coalescing several reads into one large write. See hoprnet#8421.
     async fn copy_duplex_abortable_with_datagram<A, B>(
         a: &mut A,
         b: &mut B,
         (a_to_b_buffer_size, b_to_a_buffer_size): (usize, usize),
-        return_datagram: bool,
+        datagram: bool,
         (a_abort, b_abort): (futures::future::AbortRegistration, futures::future::AbortRegistration),
     ) -> std::io::Result<(u64, u64)>
     where
         A: AsyncRead + AsyncWrite + Unpin + ?Sized,
         B: AsyncRead + AsyncWrite + Unpin + ?Sized,
     {
-        let mut a_to_b = TransferState::Running(CopyBuffer::new(a_to_b_buffer_size, false));
-        let mut b_to_a = TransferState::Running(CopyBuffer::new(b_to_a_buffer_size, return_datagram));
+        let mut a_to_b = TransferState::Running(CopyBuffer::new(a_to_b_buffer_size, datagram));
+        let mut b_to_a = TransferState::Running(CopyBuffer::new(b_to_a_buffer_size, datagram));
 
         // Abort futures are fused: once aborted, each poll returns Err(Aborted)
         let (mut abort_a, mut abort_b) = (
@@ -880,6 +881,24 @@ mod tests {
         assert!(
             recorded.len() < 3,
             "byte-stream copy is expected to coalesce datagrams under backpressure; got {recorded:?}"
+        );
+        Ok(())
+    }
+
+    /// Egress direction (session -> stream): datagram mode must also write each session frame to the
+    /// stream as its own write under backpressure — the leg that feeds the client's WireGuard.
+    #[cfg(feature = "runtime-tokio")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn datagram_mode_preserves_boundaries_on_egress_under_backpressure() -> anyhow::Result<()> {
+        // Swap roles: the session (a) yields frames, the (UDP) stream (b) records writes and
+        // backpressures once. With datagram mode on both directions, a -> b must not coalesce.
+        let mut session = datagram_source();
+        let mut stream = recording_session();
+        transfer_session_datagram(&mut session, &mut stream, 16384, None).await?;
+        assert_eq!(
+            stream.writes.lock().unwrap().clone(),
+            vec![1000, 1000, 800],
+            "each session frame must be written to the stream separately on egress; got a coalesced set"
         );
         Ok(())
     }
