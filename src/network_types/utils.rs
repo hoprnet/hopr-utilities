@@ -111,7 +111,7 @@ impl Hash for SocketAddrStr {
 }
 
 #[cfg(feature = "runtime-tokio")]
-pub use tokio_utils::{copy_duplex, copy_duplex_abortable, transfer_session};
+pub use tokio_utils::{copy_duplex, copy_duplex_abortable, transfer_session, transfer_session_datagram};
 
 #[cfg(feature = "runtime-tokio")]
 mod tokio_utils {
@@ -155,6 +155,45 @@ mod tokio_utils {
                 .await
                 .map(|(a, b)| (a as usize, b as usize))
         }
+    }
+
+    /// Datagram-boundary-preserving variant of [`transfer_session`] for UDP session bridges.
+    ///
+    /// On the `b -> a` (stream -> session) direction, writes exactly one received datagram per
+    /// session write and flushes it, instead of coalescing several return-path datagrams into one
+    /// oversized session write under write backpressure (which the segmenter can no longer split
+    /// back apart). The `a -> b` (session -> stream) direction keeps the byte-stream fast path.
+    /// See hoprnet#8421.
+    pub async fn transfer_session_datagram<A, B>(
+        a: &mut A,
+        b: &mut B,
+        max_buffer: usize,
+        abort_stream: Option<AbortRegistration>,
+    ) -> std::io::Result<(usize, usize)>
+    where
+        A: AsyncRead + AsyncWrite + Unpin + ?Sized,
+        B: AsyncRead + AsyncWrite + Unpin + ?Sized,
+    {
+        tracing::debug!(
+            egress_buffer = max_buffer,
+            ingress_buffer = max_buffer,
+            "session buffers (datagram-aware ingress)"
+        );
+
+        // Only the "stream" side may abort (like `transfer_session`); the "session" side gets a
+        // dummy registration that never fires.
+        let (_, dummy_a) = AbortHandle::new_pair();
+        let b_abort = abort_stream.unwrap_or_else(|| {
+            let (_, reg) = AbortHandle::new_pair();
+            reg
+        });
+
+        // `a` is the session, `b` is the (UDP-like) stream. Preserve datagram boundaries on the
+        // `b -> a` (stream -> session) direction so each received datagram becomes one session
+        // write; keep `a -> b` (session -> stream) on the byte-stream fast path.
+        copy_duplex_abortable_with_datagram(a, b, (max_buffer, max_buffer), (false, true), (dummy_a, b_abort))
+            .await
+            .map(|(a, b)| (a as usize, b as usize))
     }
 
     #[derive(Debug)]
@@ -224,15 +263,32 @@ mod tokio_utils {
     pub async fn copy_duplex_abortable<A, B>(
         a: &mut A,
         b: &mut B,
+        buffer_sizes: (usize, usize),
+        aborts: (futures::future::AbortRegistration, futures::future::AbortRegistration),
+    ) -> std::io::Result<(u64, u64)>
+    where
+        A: AsyncRead + AsyncWrite + Unpin + ?Sized,
+        B: AsyncRead + AsyncWrite + Unpin + ?Sized,
+    {
+        copy_duplex_abortable_with_datagram(a, b, buffer_sizes, (false, false), aborts).await
+    }
+
+    /// Variant of [`copy_duplex_abortable`] that enables datagram-boundary preservation per
+    /// direction. A `true` flag makes that direction write exactly one received datagram per write
+    /// and flush it, instead of coalescing several reads into one large write. See hoprnet#8421.
+    async fn copy_duplex_abortable_with_datagram<A, B>(
+        a: &mut A,
+        b: &mut B,
         (a_to_b_buffer_size, b_to_a_buffer_size): (usize, usize),
+        (a_to_b_datagram, b_to_a_datagram): (bool, bool),
         (a_abort, b_abort): (futures::future::AbortRegistration, futures::future::AbortRegistration),
     ) -> std::io::Result<(u64, u64)>
     where
         A: AsyncRead + AsyncWrite + Unpin + ?Sized,
         B: AsyncRead + AsyncWrite + Unpin + ?Sized,
     {
-        let mut a_to_b = TransferState::Running(CopyBuffer::new(a_to_b_buffer_size));
-        let mut b_to_a = TransferState::Running(CopyBuffer::new(b_to_a_buffer_size));
+        let mut a_to_b = TransferState::Running(CopyBuffer::new(a_to_b_buffer_size, a_to_b_datagram));
+        let mut b_to_a = TransferState::Running(CopyBuffer::new(b_to_a_buffer_size, b_to_a_datagram));
 
         // Abort futures are fused: once aborted, each poll returns Err(Aborted)
         let (mut abort_a, mut abort_b) = (
@@ -296,6 +352,9 @@ mod tokio_utils {
     struct CopyBuffer {
         read_done: bool,
         need_flush: bool,
+        /// When set, preserve datagram boundaries: never top the buffer up across reads, and flush
+        /// each fully-written datagram before reading the next one. See hoprnet#8421.
+        datagram: bool,
         pos: usize,
         cap: usize,
         amt: u64,
@@ -303,10 +362,11 @@ mod tokio_utils {
     }
 
     impl CopyBuffer {
-        fn new(buf_size: usize) -> Self {
+        fn new(buf_size: usize, datagram: bool) -> Self {
             Self {
                 read_done: false,
                 need_flush: false,
+                datagram,
                 pos: 0,
                 cap: 0,
                 amt: 0,
@@ -344,9 +404,11 @@ mod tokio_utils {
             let this = &mut *self;
             match writer.as_mut().poll_write(cx, &this.buf[this.pos..this.cap]) {
                 Poll::Pending => {
-                    // Top up the buffer towards full if we can read a bit more
-                    // data - this should improve the chances of a large write
-                    if !this.read_done && this.cap < this.buf.len() {
+                    // In byte-stream mode, top the buffer up towards full while the write is
+                    // backpressured — this improves the chances of a large write. In datagram mode
+                    // this is exactly the coalescing that must be avoided (hoprnet#8421): never
+                    // merge another datagram into a buffer that still holds an unwritten one.
+                    if !this.datagram && !this.read_done && this.cap < this.buf.len() {
                         std::task::ready!(this.poll_fill_buf(cx, reader.as_mut()))?;
                     }
                     Poll::Pending
@@ -366,6 +428,15 @@ mod tokio_utils {
             W: AsyncWrite + ?Sized,
         {
             loop {
+                // In datagram mode, flush each fully-written datagram before reading the next one,
+                // so back-to-back datagrams are delivered as separate session frames instead of
+                // being merged into one (hoprnet#8421). This parks here until the flush completes;
+                // the next datagram is not read until the current one is on the wire.
+                if self.datagram && self.need_flush {
+                    std::task::ready!(writer.as_mut().poll_flush(cx))?;
+                    self.need_flush = false;
+                }
+
                 // If our buffer is empty, then we need to read some data to
                 // continue.
                 if self.pos == self.cap && !self.read_done {
@@ -665,6 +736,144 @@ mod tests {
         assert_eq!(server_to_client_count, 5); // 'hello' was transferred
         assert!(client_to_server_count <= 8); // response only partially transferred or not at all
 
+        Ok(())
+    }
+
+    // ---- datagram-boundary regression (hoprnet#8421) -------------------------------------------
+    //
+    // Models the exit's WG->session return path: a `stream` (UDP-like) yields one datagram per
+    // read, a `session` writer records each accepted write length and is backpressured once
+    // (`Poll::Pending`) to trigger the copy loop's buffer top-up. With plain byte-stream copying
+    // the top-up coalesces several datagrams into one oversized session write; datagram mode must
+    // emit exactly one write per datagram so the segmenter can preserve the boundary.
+
+    /// `stream` side: yields each queued datagram as exactly one `poll_read` (like the UDP
+    /// `StreamReader`), then an empty read (EOF). Its write side discards.
+    #[cfg(feature = "runtime-tokio")]
+    struct DatagramSource {
+        datagrams: std::collections::VecDeque<Vec<u8>>,
+    }
+
+    #[cfg(feature = "runtime-tokio")]
+    impl tokio::io::AsyncRead for DatagramSource {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            let me = self.get_mut();
+            if let Some(d) = me.datagrams.pop_front() {
+                buf.put_slice(&d);
+            }
+            // no datagram left -> empty read == EOF
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[cfg(feature = "runtime-tokio")]
+    impl tokio::io::AsyncWrite for DatagramSource {
+        fn poll_write(self: Pin<&mut Self>, _cx: &mut Context<'_>, buf: &[u8]) -> Poll<std::io::Result<usize>> {
+            Poll::Ready(Ok(buf.len()))
+        }
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    /// `session` side: records the length of every accepted write, and returns `Poll::Pending`
+    /// once (simulating SURB-rate backpressure) to make the copy loop attempt to top up its
+    /// buffer. Its read side parks forever, so this direction stays open until the `stream` side
+    /// reaches EOF and drives the shutdown.
+    #[cfg(feature = "runtime-tokio")]
+    #[derive(Clone)]
+    struct RecordingSession {
+        writes: std::sync::Arc<std::sync::Mutex<Vec<usize>>>,
+        pending_once: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    #[cfg(feature = "runtime-tokio")]
+    impl tokio::io::AsyncRead for RecordingSession {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            _buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            // Session has nothing to send back; park so this direction does not EOF early.
+            Poll::Pending
+        }
+    }
+
+    #[cfg(feature = "runtime-tokio")]
+    impl tokio::io::AsyncWrite for RecordingSession {
+        fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<std::io::Result<usize>> {
+            if self.pending_once.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                // Backpressure once, then re-poll immediately.
+                cx.waker().wake_by_ref();
+                return Poll::Pending;
+            }
+            self.writes.lock().unwrap().push(buf.len());
+            Poll::Ready(Ok(buf.len()))
+        }
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[cfg(feature = "runtime-tokio")]
+    fn recording_session() -> RecordingSession {
+        RecordingSession {
+            writes: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            pending_once: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        }
+    }
+
+    #[cfg(feature = "runtime-tokio")]
+    fn datagram_source() -> DatagramSource {
+        DatagramSource {
+            datagrams: [vec![1u8; 1000], vec![2u8; 1000], vec![3u8; 800]].into_iter().collect(),
+        }
+    }
+
+    /// Datagram mode must write each received datagram to the session as its own write, even when
+    /// the session write is backpressured — no coalescing across datagrams.
+    #[cfg(feature = "runtime-tokio")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn datagram_mode_preserves_boundaries_under_backpressure() -> anyhow::Result<()> {
+        let mut session = recording_session();
+        let mut stream = datagram_source();
+
+        transfer_session_datagram(&mut session, &mut stream, 16384, None).await?;
+
+        let recorded = session.writes.lock().unwrap().clone();
+        assert_eq!(
+            recorded,
+            vec![1000, 1000, 800],
+            "each datagram must be written to the session separately; got a coalesced write set"
+        );
+        Ok(())
+    }
+
+    /// Guard: the plain byte-stream `transfer_session` intentionally coalesces under backpressure
+    /// (the TCP fast path). This locks in that the datagram behavior is opt-in only.
+    #[cfg(feature = "runtime-tokio")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn byte_stream_mode_still_coalesces_under_backpressure() -> anyhow::Result<()> {
+        let mut session = recording_session();
+        let mut stream = datagram_source();
+
+        transfer_session(&mut session, &mut stream, 16384, None).await?;
+
+        let recorded = session.writes.lock().unwrap().clone();
+        assert!(
+            recorded.len() < 3,
+            "byte-stream copy is expected to coalesce datagrams under backpressure; got {recorded:?}"
+        );
         Ok(())
     }
 
