@@ -157,13 +157,23 @@ mod tokio_utils {
         }
     }
 
+    /// An [`AbortRegistration`] that never fires — for a side of a transfer that cannot be aborted.
+    fn never_aborts() -> AbortRegistration {
+        AbortHandle::new_pair().1
+    }
+
     /// Datagram-boundary-preserving variant of [`transfer_session`] for UDP session bridges.
     ///
-    /// On the `b -> a` (stream -> session) direction, writes exactly one received datagram per
-    /// session write and flushes it, instead of coalescing several return-path datagrams into one
-    /// oversized session write under write backpressure (which the segmenter can no longer split
-    /// back apart). The `a -> b` (session -> stream) direction keeps the byte-stream fast path.
-    /// See hoprnet#8421.
+    /// On the `b -> a` (stream -> session) direction, each received datagram is written to the
+    /// session separately and flushed before the next datagram is read, instead of coalescing
+    /// several return-path datagrams into one oversized session write under backpressure (which the
+    /// segmenter can no longer split back apart). This preserves datagram *boundaries*; it does not
+    /// guarantee exactly one session write per datagram, since a single datagram may still span
+    /// several writes if the writer accepts partial writes. The `a -> b` (session -> stream)
+    /// direction keeps the byte-stream fast path. See hoprnet#8421.
+    ///
+    /// Precondition: `b` must yield at most one datagram per `poll_read` (as the UDP `StreamReader`
+    /// does). A reader that returns two datagrams in one read would still write them together.
     pub async fn transfer_session_datagram<A, B>(
         a: &mut A,
         b: &mut B,
@@ -180,18 +190,11 @@ mod tokio_utils {
             "session buffers (datagram-aware ingress)"
         );
 
-        // Only the "stream" side may abort (like `transfer_session`); the "session" side gets a
-        // dummy registration that never fires.
-        let (_, dummy_a) = AbortHandle::new_pair();
-        let b_abort = abort_stream.unwrap_or_else(|| {
-            let (_, reg) = AbortHandle::new_pair();
-            reg
-        });
-
-        // `a` is the session, `b` is the (UDP-like) stream. Preserve datagram boundaries on the
-        // `b -> a` (stream -> session) direction so each received datagram becomes one session
-        // write; keep `a -> b` (session -> stream) on the byte-stream fast path.
-        copy_duplex_abortable_with_datagram(a, b, (max_buffer, max_buffer), (false, true), (dummy_a, b_abort))
+        // `a` is the session, `b` is the (UDP-like) stream. Only the "stream" side may abort (like
+        // `transfer_session`); the "session" side never aborts. Preserve datagram boundaries on the
+        // `b -> a` (stream -> session) direction only; `a -> b` keeps the byte-stream fast path.
+        let b_abort = abort_stream.unwrap_or_else(never_aborts);
+        copy_duplex_abortable_with_datagram(a, b, (max_buffer, max_buffer), true, (never_aborts(), b_abort))
             .await
             .map(|(a, b)| (a as usize, b as usize))
     }
@@ -270,25 +273,26 @@ mod tokio_utils {
         A: AsyncRead + AsyncWrite + Unpin + ?Sized,
         B: AsyncRead + AsyncWrite + Unpin + ?Sized,
     {
-        copy_duplex_abortable_with_datagram(a, b, buffer_sizes, (false, false), aborts).await
+        copy_duplex_abortable_with_datagram(a, b, buffer_sizes, false, aborts).await
     }
 
-    /// Variant of [`copy_duplex_abortable`] that enables datagram-boundary preservation per
-    /// direction. A `true` flag makes that direction write exactly one received datagram per write
-    /// and flush it, instead of coalescing several reads into one large write. See hoprnet#8421.
+    /// Variant of [`copy_duplex_abortable`] that enables datagram-boundary preservation on the
+    /// `b -> a` direction only (the return path of a UDP session bridge). When `return_datagram` is
+    /// set, that direction writes each received datagram separately and flushes it instead of
+    /// coalescing several reads into one large write. See hoprnet#8421.
     async fn copy_duplex_abortable_with_datagram<A, B>(
         a: &mut A,
         b: &mut B,
         (a_to_b_buffer_size, b_to_a_buffer_size): (usize, usize),
-        (a_to_b_datagram, b_to_a_datagram): (bool, bool),
+        return_datagram: bool,
         (a_abort, b_abort): (futures::future::AbortRegistration, futures::future::AbortRegistration),
     ) -> std::io::Result<(u64, u64)>
     where
         A: AsyncRead + AsyncWrite + Unpin + ?Sized,
         B: AsyncRead + AsyncWrite + Unpin + ?Sized,
     {
-        let mut a_to_b = TransferState::Running(CopyBuffer::new(a_to_b_buffer_size, a_to_b_datagram));
-        let mut b_to_a = TransferState::Running(CopyBuffer::new(b_to_a_buffer_size, b_to_a_datagram));
+        let mut a_to_b = TransferState::Running(CopyBuffer::new(a_to_b_buffer_size, false));
+        let mut b_to_a = TransferState::Running(CopyBuffer::new(b_to_a_buffer_size, return_datagram));
 
         // Abort futures are fused: once aborted, each poll returns Err(Aborted)
         let (mut abort_a, mut abort_b) = (
@@ -353,7 +357,8 @@ mod tokio_utils {
         read_done: bool,
         need_flush: bool,
         /// When set, preserve datagram boundaries: never top the buffer up across reads, and flush
-        /// each fully-written datagram before reading the next one. See hoprnet#8421.
+        /// each fully-written datagram before reading the next one. Relies on the reader yielding at
+        /// most one datagram per `poll_read` (as the UDP `StreamReader` does). See hoprnet#8421.
         datagram: bool,
         pos: usize,
         cap: usize,
@@ -788,7 +793,6 @@ mod tests {
     /// buffer. Its read side parks forever, so this direction stays open until the `stream` side
     /// reaches EOF and drives the shutdown.
     #[cfg(feature = "runtime-tokio")]
-    #[derive(Clone)]
     struct RecordingSession {
         writes: std::sync::Arc<std::sync::Mutex<Vec<usize>>>,
         pending_once: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -840,19 +844,27 @@ mod tests {
         }
     }
 
+    /// Runs the three datagrams (1000/1000/800) through a once-backpressured session and returns the
+    /// recorded session-write lengths — via the datagram-aware transfer or the plain byte-stream one.
+    #[cfg(feature = "runtime-tokio")]
+    async fn recorded_writes(datagram: bool) -> anyhow::Result<Vec<usize>> {
+        let mut session = recording_session();
+        let mut stream = datagram_source();
+        if datagram {
+            transfer_session_datagram(&mut session, &mut stream, 16384, None).await?;
+        } else {
+            transfer_session(&mut session, &mut stream, 16384, None).await?;
+        }
+        Ok(session.writes.lock().unwrap().clone())
+    }
+
     /// Datagram mode must write each received datagram to the session as its own write, even when
     /// the session write is backpressured — no coalescing across datagrams.
     #[cfg(feature = "runtime-tokio")]
     #[tokio::test(flavor = "multi_thread")]
     async fn datagram_mode_preserves_boundaries_under_backpressure() -> anyhow::Result<()> {
-        let mut session = recording_session();
-        let mut stream = datagram_source();
-
-        transfer_session_datagram(&mut session, &mut stream, 16384, None).await?;
-
-        let recorded = session.writes.lock().unwrap().clone();
         assert_eq!(
-            recorded,
+            recorded_writes(true).await?,
             vec![1000, 1000, 800],
             "each datagram must be written to the session separately; got a coalesced write set"
         );
@@ -864,12 +876,7 @@ mod tests {
     #[cfg(feature = "runtime-tokio")]
     #[tokio::test(flavor = "multi_thread")]
     async fn byte_stream_mode_still_coalesces_under_backpressure() -> anyhow::Result<()> {
-        let mut session = recording_session();
-        let mut stream = datagram_source();
-
-        transfer_session(&mut session, &mut stream, 16384, None).await?;
-
-        let recorded = session.writes.lock().unwrap().clone();
+        let recorded = recorded_writes(false).await?;
         assert!(
             recorded.len() < 3,
             "byte-stream copy is expected to coalesce datagrams under backpressure; got {recorded:?}"
