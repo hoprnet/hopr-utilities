@@ -448,33 +448,30 @@ pub mod cpu {
         }
         let occupancy_pct = ARBITRATION_OCCUPANCY_PCT.load(Ordering::Relaxed);
         let reserve_pct = ARBITRATION_ENCODE_RESERVE_PCT.load(Ordering::Relaxed);
-        loop {
+        let may_submit = || {
+            let dec = DECODE_OUTSTANDING.load(Ordering::Relaxed);
             match decode_admit_cap(
                 pool_threads,
                 RUNNING.load(Ordering::Relaxed),
+                dec,
                 ENCODE_OUTSTANDING.load(Ordering::Relaxed),
                 occupancy_pct,
                 reserve_pct,
             ) {
-                // Unconstrained (pool not saturated, or no encode to protect) → submit immediately.
-                None => return,
-                Some(cap) if DECODE_OUTSTANDING.load(Ordering::Relaxed) < cap => return,
-                Some(_) => {
-                    // Register before re-checking so a slot freed in between is not missed.
-                    let listener = ARBITRATION_EVENT.listen();
-                    match decode_admit_cap(
-                        pool_threads,
-                        RUNNING.load(Ordering::Relaxed),
-                        ENCODE_OUTSTANDING.load(Ordering::Relaxed),
-                        occupancy_pct,
-                        reserve_pct,
-                    ) {
-                        None => return,
-                        Some(cap) if DECODE_OUTSTANDING.load(Ordering::Relaxed) < cap => return,
-                        Some(_) => listener.await,
-                    }
-                }
+                None => true,
+                Some(cap) => dec < cap,
             }
+        };
+        loop {
+            if may_submit() {
+                return;
+            }
+            // Register before re-checking so a slot freed in between is not missed.
+            let listener = ARBITRATION_EVENT.listen();
+            if may_submit() {
+                return;
+            }
+            listener.await;
         }
     }
 
@@ -485,9 +482,16 @@ pub mod cpu {
     /// is exactly the pure-forwarding-relay case. Otherwise returns `Some(cap)`, the maximum decode
     /// tasks allowed outstanding so that up to `min(enc, encode_reserve_pct% of pool)` threads are
     /// left for encode; floored at 1 for liveness.
+    /// Decode must outnumber encode outstanding by at least this factor to count as a "flood" worth
+    /// throttling. Below it the two demands are comparable, FIFO already serves them fairly, and
+    /// capping decode would needlessly cut delivery throughput (a delivered packet needs both a
+    /// decode and the encode that replenishes its SURB).
+    const DECODE_FLOOD_FACTOR: usize = 2;
+
     fn decode_admit_cap(
         pool_threads: usize,
         running: usize,
+        decode_outstanding: usize,
         enc_outstanding: usize,
         occupancy_pct: u32,
         encode_reserve_pct: u32,
@@ -498,6 +502,9 @@ pub mod cpu {
         }
         if enc_outstanding == 0 {
             return None; // nothing to protect (pure forwarding relay) → never throttle
+        }
+        if decode_outstanding <= enc_outstanding.saturating_mul(DECODE_FLOOD_FACTOR) {
+            return None; // decode is not flooding relative to encode → FIFO is fair, leave it alone
         }
         let reserve = ((pool_threads as u64 * encode_reserve_pct as u64).div_ceil(100) as usize).min(enc_outstanding);
         Some(pool_threads.saturating_sub(reserve).max(1))
@@ -675,12 +682,15 @@ pub mod cpu {
         const OCC: u32 = 75; // occupancy threshold percent
         const RES: u32 = 50; // encode reserve percent
 
+        // Signature: decode_admit_cap(pool, running, decode_outstanding, enc_outstanding, occ, reserve).
+        const FLOOD: usize = N * 4; // decode_outstanding well above enc*FLOOD_FACTOR
+
         #[test]
         fn below_occupancy_threshold_decode_is_never_throttled() {
             // 75% of 8 == 6 running threads; anything below leaves decode unconstrained.
             for running in 0..(N * OCC as usize / 100) {
                 assert_eq!(
-                    decode_admit_cap(N, running, 100, OCC, RES),
+                    decode_admit_cap(N, running, FLOOD, 4, OCC, RES),
                     None,
                     "decode must be free below the occupancy threshold (running={running})",
                 );
@@ -690,24 +700,33 @@ pub mod cpu {
         #[test]
         fn saturated_but_no_encode_is_never_throttled() {
             // Pure forwarding relay: pool full of decode, zero encode → nothing to protect.
-            assert_eq!(decode_admit_cap(N, N, 0, OCC, RES), None);
+            assert_eq!(decode_admit_cap(N, N, FLOOD, 0, OCC, RES), None);
         }
 
         #[test]
-        fn saturated_with_encode_reserves_threads_for_encode() {
-            // Full pool + plenty of encode demand → decode capped so 50% is left for encode.
-            assert_eq!(decode_admit_cap(N, N, N, OCC, RES), Some(N / 2));
+        fn balanced_load_is_not_throttled() {
+            // Saturated with encode present, but decode is comparable to encode (not a flood) → FIFO
+            // is already fair, throttling would only cut delivery. Only a genuine flood engages.
+            assert_eq!(decode_admit_cap(N, N, N, N, OCC, RES), None); // dec == enc
+            assert_eq!(decode_admit_cap(N, N, 2 * N, N, OCC, RES), None); // dec == enc * FLOOD_FACTOR
+            assert!(decode_admit_cap(N, N, 2 * N + 1, N, OCC, RES).is_some()); // just over the threshold
+        }
+
+        #[test]
+        fn decode_flood_reserves_threads_for_encode() {
+            // Decode floods (>> encode) → decode capped so 50% is left for encode.
+            assert_eq!(decode_admit_cap(N, N, FLOOD, N, OCC, RES), Some(N / 2));
             // Reserve never exceeds actual encode demand: only 1 encode task → reserve just 1 thread.
-            assert_eq!(decode_admit_cap(N, N, 1, OCC, RES), Some(N - 1));
+            assert_eq!(decode_admit_cap(N, N, FLOOD, 1, OCC, RES), Some(N - 1));
         }
 
         #[test]
         fn cap_is_never_zero_liveness() {
             // A full encode reserve on a tiny pool still admits at least one decode task.
-            assert_eq!(decode_admit_cap(2, 2, 10, OCC, 100), Some(1));
+            assert_eq!(decode_admit_cap(2, 2, 50, 10, OCC, 100), Some(1));
             for running in 0..=N {
-                for enc in 0..=N {
-                    if let Some(cap) = decode_admit_cap(N, running, enc, OCC, RES) {
+                for enc in 1..=N {
+                    if let Some(cap) = decode_admit_cap(N, running, FLOOD, enc, OCC, RES) {
                         assert!(cap >= 1, "cap must never be zero (running={running}, enc={enc})");
                     }
                 }
