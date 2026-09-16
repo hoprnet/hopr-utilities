@@ -73,7 +73,7 @@ pub fn encode_pool_has_headroom() -> bool {
 /// - **queue_limit**: configured maximum (for comparison)
 #[cfg(feature = "parallelize-rayon")]
 pub mod cpu {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
     use futures::channel::oneshot;
     pub use rayon;
@@ -389,6 +389,120 @@ pub mod cpu {
         ENCODE_TIMEOUT_DROPS.load(Ordering::Relaxed)
     }
 
+    // ───────────────────────── encode/decode pool arbitration ─────────────────────────
+    //
+    // The encode (SPHINX wrap + SURB generation) and decode (SPHINX peel) paths share the single
+    // Rayon pool. Left unmanaged, a heavy download floods decode (forwarding) and starves SURB
+    // encode → the SURB ring drains → download collapses (#8246).
+    //
+    // The arbiter is deliberately **asymmetric and occupancy-gated** so it never harms the common
+    // case (measured: a symmetric cap that always engaged halved forwarding):
+    //   * Only DECODE is ever throttled; ENCODE never blocks (it is the light, latency-critical,
+    //     protected class — SURB generation).
+    //   * Decode is throttled ONLY when all of: the pool is genuinely saturated (running threads ≥
+    //     `occupancy_pct`), AND encode work is actually present, AND decode already exceeds its share.
+    //   * A pure forwarding relay (encode ≈ 0) is therefore never throttled; nor is any node whose
+    //     pool is below the occupancy threshold — so the arbiter adds ~zero overhead until it is
+    //     genuinely needed.
+    // Occupancy is measured by [`RUNNING`] (tasks actually executing on a pool thread), not the
+    // queued+running `*_OUTSTANDING` counters, which the deep pipeline ready-queues keep saturated.
+
+    /// When `false`, [`spawn_decode_blocking`] skips admission entirely.
+    static ARBITRATION_ENABLED: AtomicBool = AtomicBool::new(true);
+    /// Pool occupancy (percent of [`RUNNING`] threads over pool size) at or above which decode
+    /// admission may engage. Below it, decode is never throttled.
+    static ARBITRATION_OCCUPANCY_PCT: AtomicU32 = AtomicU32::new(75);
+    /// Fraction (percent) of the pool that decode yields to encode when both contend under saturation.
+    static ARBITRATION_ENCODE_RESERVE_PCT: AtomicU32 = AtomicU32::new(50);
+    /// Tasks currently executing on a pool thread (true occupancy, `0..=pool_thread_count`).
+    static RUNNING: AtomicUsize = AtomicUsize::new(0);
+    /// Notified when a running task finishes (a pool slot frees) so a blocked decode admitter retries.
+    static ARBITRATION_EVENT: event_listener::Event = event_listener::Event::new();
+
+    /// Returns the number of tasks currently executing on a pool thread.
+    #[inline]
+    pub fn running_tasks() -> usize {
+        RUNNING.load(Ordering::Relaxed)
+    }
+
+    /// Configure encode/decode pool arbitration. Call once at startup, next to [`init_thread_pool`].
+    ///
+    /// `enabled` gates the whole mechanism. `occupancy_pct` is the pool-occupancy threshold below
+    /// which decode is never throttled. `encode_reserve_pct` is the share of the pool decode yields
+    /// to encode when both contend under saturation. Both percentages are clamped to `1..=100`.
+    pub fn configure_arbitration(enabled: bool, occupancy_pct: u32, encode_reserve_pct: u32) {
+        ARBITRATION_ENABLED.store(enabled, Ordering::Relaxed);
+        ARBITRATION_OCCUPANCY_PCT.store(occupancy_pct.clamp(1, 100), Ordering::Relaxed);
+        ARBITRATION_ENCODE_RESERVE_PCT.store(encode_reserve_pct.clamp(1, 100), Ordering::Relaxed);
+    }
+
+    /// Awaits until the decode path may submit without starving encode. Passthrough when arbitration
+    /// is disabled or the pool is uninitialised; see the module policy note above.
+    async fn admit_decode() {
+        if !ARBITRATION_ENABLED.load(Ordering::Relaxed) {
+            return;
+        }
+        let pool_threads = pool_thread_count();
+        if pool_threads == 0 {
+            return;
+        }
+        let occupancy_pct = ARBITRATION_OCCUPANCY_PCT.load(Ordering::Relaxed);
+        let reserve_pct = ARBITRATION_ENCODE_RESERVE_PCT.load(Ordering::Relaxed);
+        loop {
+            match decode_admit_cap(
+                pool_threads,
+                RUNNING.load(Ordering::Relaxed),
+                ENCODE_OUTSTANDING.load(Ordering::Relaxed),
+                occupancy_pct,
+                reserve_pct,
+            ) {
+                // Unconstrained (pool not saturated, or no encode to protect) → submit immediately.
+                None => return,
+                Some(cap) if DECODE_OUTSTANDING.load(Ordering::Relaxed) < cap => return,
+                Some(_) => {
+                    // Register before re-checking so a slot freed in between is not missed.
+                    let listener = ARBITRATION_EVENT.listen();
+                    match decode_admit_cap(
+                        pool_threads,
+                        RUNNING.load(Ordering::Relaxed),
+                        ENCODE_OUTSTANDING.load(Ordering::Relaxed),
+                        occupancy_pct,
+                        reserve_pct,
+                    ) {
+                        None => return,
+                        Some(cap) if DECODE_OUTSTANDING.load(Ordering::Relaxed) < cap => return,
+                        Some(_) => listener.await,
+                    }
+                }
+            }
+        }
+    }
+
+    /// The decode-admission policy, as a pure function so it is trivially testable.
+    ///
+    /// Returns `None` when decode is unconstrained — either the pool is below the occupancy threshold
+    /// (`running < occupancy_pct% of pool`) or there is no encode work to protect (`enc == 0`), which
+    /// is exactly the pure-forwarding-relay case. Otherwise returns `Some(cap)`, the maximum decode
+    /// tasks allowed outstanding so that up to `min(enc, encode_reserve_pct% of pool)` threads are
+    /// left for encode; floored at 1 for liveness.
+    fn decode_admit_cap(
+        pool_threads: usize,
+        running: usize,
+        enc_outstanding: usize,
+        occupancy_pct: u32,
+        encode_reserve_pct: u32,
+    ) -> Option<usize> {
+        let occupancy_threshold = (pool_threads as u64 * occupancy_pct as u64 / 100) as usize;
+        if running < occupancy_threshold {
+            return None; // pool not saturated → never throttle
+        }
+        if enc_outstanding == 0 {
+            return None; // nothing to protect (pure forwarding relay) → never throttle
+        }
+        let reserve = ((pool_threads as u64 * encode_reserve_pct as u64).div_ceil(100) as usize).min(enc_outstanding);
+        Some(pool_threads.saturating_sub(reserve).max(1))
+    }
+
     /// RAII guard that decrements a tagged outstanding counter when dropped.
     ///
     /// Caller must increment the counter before constructing this guard.
@@ -401,7 +515,29 @@ pub mod cpu {
         }
     }
 
+    /// RAII guard tracking a task that is actually executing on a pool thread. Increments [`RUNNING`]
+    /// on construction; on drop decrements it and wakes one blocked decode admitter (a slot freed).
+    struct RunningGuard;
+
+    impl RunningGuard {
+        #[inline]
+        fn enter() -> Self {
+            RUNNING.fetch_add(1, Ordering::Relaxed);
+            Self
+        }
+    }
+
+    impl Drop for RunningGuard {
+        #[inline]
+        fn drop(&mut self) {
+            RUNNING.fetch_sub(1, Ordering::Relaxed);
+            ARBITRATION_EVENT.notify(1);
+        }
+    }
+
     /// Like [`spawn_fifo_blocking`] but also tracks the task in [`ENCODE_OUTSTANDING`].
+    ///
+    /// Encode is the protected class: it is never throttled by arbitration.
     pub async fn spawn_encode_blocking<R: Send + 'static>(
         f: impl FnOnce() -> R + Send + 'static,
         operation: &'static str,
@@ -411,11 +547,13 @@ pub mod cpu {
         spawn_fifo_blocking(f, operation).await
     }
 
-    /// Like [`spawn_fifo_blocking`] but also tracks the task in [`DECODE_OUTSTANDING`].
+    /// Like [`spawn_fifo_blocking`] but also tracks the task in [`DECODE_OUTSTANDING`] and yields a
+    /// fair-share pool slot to encode first when the pool is saturated (see [`admit_decode`]).
     pub async fn spawn_decode_blocking<R: Send + 'static>(
         f: impl FnOnce() -> R + Send + 'static,
         operation: &'static str,
     ) -> Result<R, SpawnError> {
+        admit_decode().await;
         DECODE_OUTSTANDING.fetch_add(1, Ordering::Relaxed);
         let _guard = TaggedGuard(&DECODE_OUTSTANDING);
         spawn_fifo_blocking(f, operation).await
@@ -463,6 +601,8 @@ pub mod cpu {
             let wait_duration = submitted_at.elapsed();
             metrics::observe_queue_wait(wait_duration.as_secs_f64());
 
+            // Mark this task as occupying a pool thread for the duration of `f` (drops after it).
+            let _running = RunningGuard::enter();
             let execution_start = std::time::Instant::now();
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
             metrics::observe_execution(operation, execution_start.elapsed().as_secs_f64());
@@ -525,6 +665,69 @@ pub mod cpu {
             .await
             .expect("rayon task channel closed unexpectedly")
             .unwrap_or_else(|panic| std::panic::resume_unwind(panic)))
+    }
+
+    #[cfg(test)]
+    mod arbitration_tests {
+        use super::{admit_decode, configure_arbitration, decode_admit_cap};
+
+        const N: usize = 8;
+        const OCC: u32 = 75; // occupancy threshold percent
+        const RES: u32 = 50; // encode reserve percent
+
+        #[test]
+        fn below_occupancy_threshold_decode_is_never_throttled() {
+            // 75% of 8 == 6 running threads; anything below leaves decode unconstrained.
+            for running in 0..(N * OCC as usize / 100) {
+                assert_eq!(
+                    decode_admit_cap(N, running, 100, OCC, RES),
+                    None,
+                    "decode must be free below the occupancy threshold (running={running})",
+                );
+            }
+        }
+
+        #[test]
+        fn saturated_but_no_encode_is_never_throttled() {
+            // Pure forwarding relay: pool full of decode, zero encode → nothing to protect.
+            assert_eq!(decode_admit_cap(N, N, 0, OCC, RES), None);
+        }
+
+        #[test]
+        fn saturated_with_encode_reserves_threads_for_encode() {
+            // Full pool + plenty of encode demand → decode capped so 50% is left for encode.
+            assert_eq!(decode_admit_cap(N, N, N, OCC, RES), Some(N / 2));
+            // Reserve never exceeds actual encode demand: only 1 encode task → reserve just 1 thread.
+            assert_eq!(decode_admit_cap(N, N, 1, OCC, RES), Some(N - 1));
+        }
+
+        #[test]
+        fn cap_is_never_zero_liveness() {
+            // A full encode reserve on a tiny pool still admits at least one decode task.
+            assert_eq!(decode_admit_cap(2, 2, 10, OCC, 100), Some(1));
+            for running in 0..=N {
+                for enc in 0..=N {
+                    if let Some(cap) = decode_admit_cap(N, running, enc, OCC, RES) {
+                        assert!(cap >= 1, "cap must never be zero (running={running}, enc={enc})");
+                    }
+                }
+            }
+        }
+
+        /// Disabled arbitration and an uninitialised pool are both pure passthrough (never block).
+        #[tokio::test]
+        async fn admit_decode_is_passthrough_when_disabled_or_pool_uninitialised() {
+            // Pool is uninitialised in unit tests (pool_thread_count() == 0) → immediate return.
+            tokio::time::timeout(std::time::Duration::from_secs(5), admit_decode())
+                .await
+                .expect("admit_decode must not block with an uninitialised pool");
+
+            configure_arbitration(false, OCC, RES);
+            tokio::time::timeout(std::time::Duration::from_secs(5), admit_decode())
+                .await
+                .expect("admit_decode must not block when disabled");
+            configure_arbitration(true, OCC, RES); // restore default for other tests
+        }
     }
 }
 
