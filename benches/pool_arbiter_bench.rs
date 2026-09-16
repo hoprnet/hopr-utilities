@@ -101,12 +101,9 @@ fn decode_only_no_encode(c: &mut Criterion) {
         cpu::with_arbitration(common::arbitration(enabled));
         g.bench_function(if enabled { "arbiter_on" } else { "arbiter_off" }, |b| {
             b.to_async(&rt).iter(|| async {
-                let tasks: Vec<_> = (0..64)
-                    .map(|_| cpu::spawn_decode_blocking(|| spin(DECODE_US), "b_dec"))
-                    .collect();
-                for t in tasks {
-                    let _ = t.await;
-                }
+                // Poll all 64 concurrently so decode tasks actually overlap on the pool.
+                let tasks = (0..64).map(|_| cpu::spawn_decode_blocking(|| spin(DECODE_US), "b_dec"));
+                let _ = futures::future::join_all(tasks).await;
             });
         });
     }
@@ -123,18 +120,10 @@ fn exit_mixed_encode_decode(c: &mut Criterion) {
         cpu::with_arbitration(common::arbitration(enabled));
         g.bench_function(if enabled { "arbiter_on" } else { "arbiter_off" }, |b| {
             b.to_async(&rt).iter(|| async {
-                let enc: Vec<_> = (0..64)
-                    .map(|_| cpu::spawn_encode_blocking(|| spin(ENCODE_US), "b_enc"))
-                    .collect();
-                let dec: Vec<_> = (0..64)
-                    .map(|_| cpu::spawn_decode_blocking(|| spin(DECODE_US), "b_dec"))
-                    .collect();
-                for t in enc {
-                    let _ = t.await;
-                }
-                for t in dec {
-                    let _ = t.await;
-                }
+                // Poll encode and decode batches concurrently so both classes contend at once.
+                let enc = (0..64).map(|_| cpu::spawn_encode_blocking(|| spin(ENCODE_US), "b_enc"));
+                let dec = (0..64).map(|_| cpu::spawn_decode_blocking(|| spin(DECODE_US), "b_dec"));
+                futures::future::join(futures::future::join_all(enc), futures::future::join_all(dec)).await;
             });
         });
     }
