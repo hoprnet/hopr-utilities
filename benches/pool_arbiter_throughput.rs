@@ -132,7 +132,8 @@ fn main() {
     ];
 
     println!(
-        "\n## Real-weight throughput/latency matrix (enc={ENCODE_US}µs, dec={DECODE_US}µs, {PAYLOAD_BYTES}B/pkt, pool={PINNED_POOL}, {}ms)\n",
+        "\n## Real-weight throughput/latency matrix (enc={ENCODE_US}µs, dec={DECODE_US}µs, {PAYLOAD_BYTES}B/pkt, \
+         pool={PINNED_POOL}, {}ms)\n",
         WINDOW.as_millis()
     );
     println!("| scenario | arb | enc MB/s | dec MB/s | total MB/s | enc P50/P99 ms | dec P50/P99 ms |");

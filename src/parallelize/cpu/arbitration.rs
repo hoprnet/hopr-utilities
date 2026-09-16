@@ -6,12 +6,12 @@
 //!
 //! The arbiter is deliberately **asymmetric and occupancy-gated** so it never harms the common case
 //! (measured: a symmetric cap that always engaged halved forwarding):
-//!   * Only DECODE is ever throttled; ENCODE never blocks (it is the light, latency-critical,
-//!     protected class — SURB generation).
-//!   * Decode is throttled ONLY when all of: the pool is genuinely saturated (running threads ≥
-//!     `occupancy_pct`), AND encode work is actually present, AND decode already exceeds its share.
-//!   * A pure forwarding relay (encode ≈ 0) is therefore never throttled; nor is any node whose pool
-//!     is below the occupancy threshold — so the arbiter adds ~zero overhead until genuinely needed.
+//!   * Only DECODE is ever throttled; ENCODE never blocks (it is the light, latency-critical, protected class — SURB
+//!     generation).
+//!   * Decode is throttled ONLY when all of: the pool is genuinely saturated (running threads ≥ `occupancy_pct`), AND
+//!     encode work is actually present, AND decode already exceeds its share.
+//!   * A pure forwarding relay (encode ≈ 0) is therefore never throttled; nor is any node whose pool is below the
+//!     occupancy threshold — so the arbiter adds ~zero overhead until genuinely needed.
 //!
 //! Occupancy is measured by [`RUNNING`] (tasks actually executing on a pool thread), not the
 //! queued+running `*_OUTSTANDING` counters, which the deep pipeline ready-queues keep saturated.
