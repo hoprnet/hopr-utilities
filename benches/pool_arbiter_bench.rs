@@ -8,6 +8,9 @@
 //!
 //! Run: `cargo bench --features parallelize-rayon --bench pool_arbiter_bench`
 
+#[path = "bench_common/mod.rs"]
+mod common;
+
 use std::{
     sync::{
         Arc,
@@ -16,24 +19,20 @@ use std::{
     time::{Duration, Instant},
 };
 
+use common::{DECODE_US, ENCODE_US_3HOP_2SURB as ENCODE_US, spin};
 use criterion::{Criterion, criterion_group, criterion_main};
 use hopr_utilities::parallelize::cpu;
 
-fn spin(us: u64) {
-    let end = Instant::now() + Duration::from_micros(us);
-    while Instant::now() < end {
-        std::hint::spin_loop();
-    }
-}
-
-const DECODE_US: u64 = 300;
-const ENCODE_US: u64 = 120;
 const ENCODE_BATCH: usize = 200;
 const FLOOD_SUBMITTERS: usize = 16;
 const PINNED_POOL: usize = 2; // constrain resources so decode-flood actually saturates the pool
 
 fn runtime() -> tokio::runtime::Runtime {
-    tokio::runtime::Builder::new_multi_thread().worker_threads(4).enable_all().build().unwrap()
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(4)
+        .enable_all()
+        .build()
+        .unwrap()
 }
 
 fn flood_then_measure(c: &mut Criterion, group: &str, flood_encode: bool) {
@@ -102,8 +101,9 @@ fn decode_only_no_encode(c: &mut Criterion) {
         cpu::configure_arbitration(enabled, 75, 50);
         g.bench_function(if enabled { "arbiter_on" } else { "arbiter_off" }, |b| {
             b.to_async(&rt).iter(|| async {
-                let tasks: Vec<_> =
-                    (0..64).map(|_| cpu::spawn_decode_blocking(|| spin(DECODE_US), "b_dec")).collect();
+                let tasks: Vec<_> = (0..64)
+                    .map(|_| cpu::spawn_decode_blocking(|| spin(DECODE_US), "b_dec"))
+                    .collect();
                 for t in tasks {
                     let _ = t.await;
                 }
@@ -123,8 +123,12 @@ fn exit_mixed_encode_decode(c: &mut Criterion) {
         cpu::configure_arbitration(enabled, 75, 50);
         g.bench_function(if enabled { "arbiter_on" } else { "arbiter_off" }, |b| {
             b.to_async(&rt).iter(|| async {
-                let enc: Vec<_> = (0..64).map(|_| cpu::spawn_encode_blocking(|| spin(ENCODE_US), "b_enc")).collect();
-                let dec: Vec<_> = (0..64).map(|_| cpu::spawn_decode_blocking(|| spin(DECODE_US), "b_dec")).collect();
+                let enc: Vec<_> = (0..64)
+                    .map(|_| cpu::spawn_encode_blocking(|| spin(ENCODE_US), "b_enc"))
+                    .collect();
+                let dec: Vec<_> = (0..64)
+                    .map(|_| cpu::spawn_decode_blocking(|| spin(DECODE_US), "b_dec"))
+                    .collect();
                 for t in enc {
                     let _ = t.await;
                 }

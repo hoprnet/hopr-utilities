@@ -1,23 +1,27 @@
 //! Sustained-throughput + latency matrix for the encode/decode pool arbiter (harness = false).
 //!
-//! Busy-weights are the **real** SPHINX op costs measured on this machine via `packet_bench`:
-//!   decode (forwarding/peel)            = ~104 µs
-//!   encode (full, 3-hop/2-SURB incl. SURB generation) = ~465 µs   (encode is the *expensive* op)
-//! so a delivered download packet costs ~104 µs decode + ~465 µs encode. We sweep the demand ratio
+//! Busy-weights are the **real** SPHINX op costs measured on this machine via `packet_bench`, and
+//! throughput is reported as delivered MB/s at SESSION_MTU (1020 B/pkt):
+//!   decode (forwarding/peel, any hop)                 = ~98 µs
+//!   encode (full, 3-hop/2-SURB incl. SURB generation) = ~471 µs   (encode is the *expensive* op)
+//! so a delivered download packet costs ~98 µs decode + ~471 µs encode. We sweep the demand ratio
 //! across decode-dominant (download flood), balanced-count, and encode-dominant regimes on a small
-//! pinned pool, and report per-class throughput + P50/P99 latency, arbiter ON vs OFF. Goal: the
-//! arbiter must protect encode under a decode-volume flood while never cutting delivery in the other
-//! regimes (max throughput everywhere).
+//! pinned pool, and report per-class MB/s + P50/P99 latency, arbiter ON vs OFF. Goal: the arbiter
+//! must protect encode under a decode-volume flood while never cutting delivery in the other regimes
+//! (max throughput everywhere).
 //!
-//! Representative result on this machine (enc=465µs, dec=104µs, pool=2 threads):
-//!   scenario             | enc ops/s ON→OFF | enc P99 ON→OFF | dec ops/s ON→OFF
-//!   relay (decode-only)  |        —         |      —         | 19099 → 18995  (zero overhead)
-//!   download flood 1:16  |   1748 → 796     | 0.6 → 1.3 ms   | 11240 → 15532  (encode 2.2× protected)
-//!   download heavy 1:8   |   1758 → 1192    | 0.6 → 0.9 ms   | 11291 → 13790
-//!   balanced 4:4         |   3509 → 3487    | 1.2 → 1.3 ms   |  3510 →  3629  (neutral)
-//!   encode-dominant 8:2  |   4087 → 4063    | 2.0 → 2.0 ms   |  1022 →  1097  (neutral)
+//! Representative result on this machine (enc=471µs, dec=98µs, 1020 B/pkt, pool=2 threads):
+//!   scenario             | enc MB/s ON→OFF | enc P99 ON→OFF | dec MB/s ON→OFF
+//!   relay (decode-only)  |       —         |      —         | 19.71 → 19.78  (zero overhead)
+//!   download flood 1:16  |  1.70 → 0.80    | 0.6 → 1.3 ms   | 11.47 → 15.85  (encode 2.1× protected)
+//!   download heavy 1:8   |  1.71 → 1.20    | 0.6 → 0.9 ms   | 11.56 → 13.95
+//!   balanced 4:4         |  3.41 → 3.42    | 1.2 → 1.2 ms   |  3.43 →  3.42  (neutral)
+//!   encode-dominant 8:2  |  3.94 → 3.92    | 2.0 → 2.1 ms   |  0.98 →  1.01  (neutral)
 //! The flood-gate keeps every non-flood regime neutral while protecting SURB encode under a genuine
 //! decode-volume flood (the #8246 case), so download SURB production never starves.
+
+#[path = "bench_common/mod.rs"]
+mod common;
 
 use std::{
     sync::{
@@ -27,19 +31,11 @@ use std::{
     time::{Duration, Instant},
 };
 
+use common::{DECODE_US, ENCODE_US_3HOP_2SURB as ENCODE_US, PAYLOAD_BYTES, spin};
 use hopr_utilities::parallelize::cpu;
 
-const DECODE_US: u64 = 104; // measured: packet_forwarding
-const ENCODE_US: u64 = 465; // measured: packet_sending_no_precomputation 3-hop/2-SURB
 const PINNED_POOL: usize = 2;
 const WINDOW: Duration = Duration::from_millis(2000);
-
-fn spin(us: u64) {
-    let end = Instant::now() + Duration::from_micros(us);
-    while Instant::now() < end {
-        std::hint::spin_loop();
-    }
-}
 
 #[derive(Default)]
 struct Class {
@@ -136,21 +132,24 @@ fn main() {
     ];
 
     println!(
-        "\n## Real-weight throughput/latency matrix (enc={ENCODE_US}µs, dec={DECODE_US}µs, pool={PINNED_POOL}, {}ms)\n",
+        "\n## Real-weight throughput/latency matrix (enc={ENCODE_US}µs, dec={DECODE_US}µs, {PAYLOAD_BYTES}B/pkt, pool={PINNED_POOL}, {}ms)\n",
         WINDOW.as_millis()
     );
-    println!("| scenario | arb | enc ops/s | dec ops/s | enc P50/P99 ms | dec P50/P99 ms |");
-    println!("|---|---|--:|--:|--:|--:|");
+    println!("| scenario | arb | enc MB/s | dec MB/s | total MB/s | enc P50/P99 ms | dec P50/P99 ms |");
+    println!("|---|---|--:|--:|--:|--:|--:|");
+    let mb = |ops: u64, s: f64| ops as f64 * PAYLOAD_BYTES as f64 / (1024.0 * 1024.0) / s;
     for (label, enc, dec) in scenarios {
         for enabled in [true, false] {
             cpu::configure_arbitration(enabled, 75, 50);
             let r = rt.block_on(measure(*enc, *dec));
             let s = WINDOW.as_secs_f64();
+            let (enc_mb, dec_mb) = (mb(r.enc.ops, s), mb(r.dec.ops, s));
             println!(
-                "| {label} | {} | {:.0} | {:.0} | {:.1}/{:.1} | {:.1}/{:.1} |",
+                "| {label} | {} | {:.2} | {:.2} | {:.2} | {:.1}/{:.1} | {:.1}/{:.1} |",
                 if enabled { "ON " } else { "off" },
-                r.enc.ops as f64 / s,
-                r.dec.ops as f64 / s,
+                enc_mb,
+                dec_mb,
+                enc_mb + dec_mb,
                 r.enc.p50_ms,
                 r.enc.p99_ms,
                 r.dec.p50_ms,

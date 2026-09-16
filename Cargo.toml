@@ -216,3 +216,8 @@ hopr-types = { version = "2.3.0", features = ["use-bindings"] }
 name = "pool_arbiter_throughput"
 harness = false
 required-features = ["parallelize-rayon"]
+
+[[bench]]
+name = "pool_arbiter_hops"
+harness = false
+required-features = ["parallelize-rayon"]
