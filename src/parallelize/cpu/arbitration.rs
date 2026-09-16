@@ -56,8 +56,22 @@ impl ArbitrationConfig {
     /// ```
     /// # use hopr_utilities::parallelize::cpu::ArbitrationConfig;
     /// assert!(ArbitrationConfig::Disabled.validate().is_ok());
-    /// assert!(ArbitrationConfig::Enabled { occupancy_pct: 75, encode_reserve_pct: 50 }.validate().is_ok());
-    /// assert!(ArbitrationConfig::Enabled { occupancy_pct: 0, encode_reserve_pct: 50 }.validate().is_err());
+    /// assert!(
+    ///     ArbitrationConfig::Enabled {
+    ///         occupancy_pct: 75,
+    ///         encode_reserve_pct: 50
+    ///     }
+    ///     .validate()
+    ///     .is_ok()
+    /// );
+    /// assert!(
+    ///     ArbitrationConfig::Enabled {
+    ///         occupancy_pct: 0,
+    ///         encode_reserve_pct: 50
+    ///     }
+    ///     .validate()
+    ///     .is_err()
+    /// );
     /// ```
     pub fn validate(&self) -> Result<(), ArbitrationConfigError> {
         if let ArbitrationConfig::Enabled {
