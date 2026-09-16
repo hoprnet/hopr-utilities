@@ -3404,7 +3404,7 @@ dependencies = [
 
 [[package]]
 name = "hopr-utilities"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "anyhow",
  "arrayvec",
@@ -3414,6 +3414,7 @@ dependencies = [
  "blokli-client",
  "const-hex",
  "crossfire",
+ "event-listener 5.4.2",
  "flume",
  "futures",
  "futures-time",
