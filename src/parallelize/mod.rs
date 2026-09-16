@@ -744,8 +744,8 @@ pub mod cpu {
         use std::sync::atomic::Ordering;
 
         use super::{
-            ARBITRATION_CONFIGURED, ARBITRATION_ENABLED, DECODE_OUTSTANDING, admit_decode, configure_arbitration,
-            configure_arbitration_once, decode_admit_cap,
+            ARBITRATION_CONFIGURED, ARBITRATION_ENABLED, DECODE_OUTSTANDING, ENCODE_OUTSTANDING, RUNNING, admit_decode,
+            configure_arbitration, configure_arbitration_once, decode_admit_cap, try_reserve_decode,
         };
 
         const N: usize = 8;
@@ -820,6 +820,57 @@ pub mod cpu {
                 .expect("admit_decode must not block when disabled");
             DECODE_OUTSTANDING.fetch_sub(1, Ordering::Relaxed);
             configure_arbitration(true, OCC, RES); // restore default for other tests
+        }
+
+        /// Drives `try_reserve_decode` directly — the atomic CAS reservation wrapper around
+        /// `decode_admit_cap` that the async `admit_decode` loop delegates to. Unit tests run with an
+        /// uninitialised pool, so `admit_decode` short-circuits and never exercises this path; this
+        /// test simulates a saturated pool by setting the counters directly.
+        #[test]
+        #[serial_test::serial] // mutates the process-global RUNNING / *_OUTSTANDING counters
+        fn try_reserve_decode_refuses_under_flood_and_admits_otherwise() {
+            let restore = || {
+                RUNNING.store(0, Ordering::Release);
+                ENCODE_OUTSTANDING.store(0, Ordering::Release);
+                DECODE_OUTSTANDING.store(0, Ordering::Release);
+            };
+
+            // Saturated pool + encode present + decode flooding (dec > enc * FLOOD_FACTOR) → the cap
+            // engages and decode is already over it, so a fresh reservation is refused and the counter
+            // is left untouched.
+            RUNNING.store(N, Ordering::Release);
+            ENCODE_OUTSTANDING.store(N, Ordering::Release);
+            DECODE_OUTSTANDING.store(FLOOD, Ordering::Release);
+            assert!(!try_reserve_decode(N, OCC, RES), "must refuse a decode flood");
+            assert_eq!(
+                DECODE_OUTSTANDING.load(Ordering::Relaxed),
+                FLOOD,
+                "a refused call must not reserve"
+            );
+
+            // Same saturation, but decode is only comparable to encode (not a flood) → unconstrained,
+            // so the reservation succeeds and increments the counter by exactly one.
+            DECODE_OUTSTANDING.store(N, Ordering::Release);
+            assert!(
+                try_reserve_decode(N, OCC, RES),
+                "must admit when decode is not flooding"
+            );
+            assert_eq!(
+                DECODE_OUTSTANDING.load(Ordering::Relaxed),
+                N + 1,
+                "an admitted call reserves one slot"
+            );
+
+            // Below the occupancy threshold decode is never throttled, even while flooding.
+            RUNNING.store(0, Ordering::Release);
+            DECODE_OUTSTANDING.store(FLOOD, Ordering::Release);
+            assert!(
+                try_reserve_decode(N, OCC, RES),
+                "must admit below the occupancy threshold"
+            );
+            assert_eq!(DECODE_OUTSTANDING.load(Ordering::Relaxed), FLOOD + 1);
+
+            restore();
         }
 
         /// `configure_arbitration_once` is first-wins: the first caller applies, later ones no-op, so
