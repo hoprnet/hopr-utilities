@@ -41,7 +41,7 @@ fn flood_then_measure(c: &mut Criterion, group: &str, flood_encode: bool) {
     let mut g = c.benchmark_group(group);
     g.sample_size(20);
     for enabled in [true, false] {
-        cpu::configure_arbitration(enabled, 75, 50);
+        cpu::with_arbitration(common::arbitration(enabled));
         g.bench_function(if enabled { "arbiter_on" } else { "arbiter_off" }, |b| {
             b.to_async(&rt).iter_custom(|iters| async move {
                 let stop = Arc::new(AtomicBool::new(false));
@@ -98,7 +98,7 @@ fn decode_only_no_encode(c: &mut Criterion) {
     let mut g = c.benchmark_group("decode_only_no_encode");
     g.sample_size(20);
     for enabled in [true, false] {
-        cpu::configure_arbitration(enabled, 75, 50);
+        cpu::with_arbitration(common::arbitration(enabled));
         g.bench_function(if enabled { "arbiter_on" } else { "arbiter_off" }, |b| {
             b.to_async(&rt).iter(|| async {
                 let tasks: Vec<_> = (0..64)
@@ -120,7 +120,7 @@ fn exit_mixed_encode_decode(c: &mut Criterion) {
     let mut g = c.benchmark_group("exit_mixed_encode_decode");
     g.sample_size(20);
     for enabled in [true, false] {
-        cpu::configure_arbitration(enabled, 75, 50);
+        cpu::with_arbitration(common::arbitration(enabled));
         g.bench_function(if enabled { "arbiter_on" } else { "arbiter_off" }, |b| {
             b.to_async(&rt).iter(|| async {
                 let enc: Vec<_> = (0..64)

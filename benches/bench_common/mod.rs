@@ -24,6 +24,7 @@ pub const DECODE_US: u64 = 98;
 pub const PAYLOAD_BYTES: u64 = 1020;
 
 /// Busy-emulate a CPU op of `us` microseconds by spinning (models a pool thread blocked in crypto).
+#[inline]
 pub fn spin(us: u64) {
     let end = Instant::now() + Duration::from_micros(us);
     while Instant::now() < end {
@@ -32,6 +33,7 @@ pub fn spin(us: u64) {
 }
 
 /// Production pool sizing: `available_parallelism / 2`, floored so the pool is never degenerate.
+#[inline]
 pub fn pool_size() -> usize {
     std::thread::available_parallelism()
         .map(|n| (n.get() / 2).max(2))
@@ -39,6 +41,21 @@ pub fn pool_size() -> usize {
 }
 
 /// Convert a packet rate (packets/s) to delivered MB/s at [`PAYLOAD_BYTES`].
+#[inline]
 pub fn pps_to_mb(pps: f64) -> f64 {
     pps * PAYLOAD_BYTES as f64 / (1024.0 * 1024.0)
+}
+
+/// The arbiter config a bench uses to toggle arbitration on/off at the default 75/50 tuning.
+#[inline]
+pub fn arbitration(enabled: bool) -> hopr_utilities::parallelize::cpu::ArbitrationConfig {
+    use hopr_utilities::parallelize::cpu::ArbitrationConfig;
+    if enabled {
+        ArbitrationConfig::Enabled {
+            occupancy_pct: 75,
+            encode_reserve_pct: 50,
+        }
+    } else {
+        ArbitrationConfig::Disabled
+    }
 }

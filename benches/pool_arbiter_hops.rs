@@ -69,7 +69,7 @@ fn main() {
         .unwrap();
     let pool = pool_size();
     let _ = cpu::init_thread_pool(pool);
-    cpu::configure_arbitration(true, 75, 50);
+    cpu::with_arbitration(common::arbitration(true));
 
     // ── Isolated per-role capacities (arbiter on; each role is a distinct machine's pool) ──────────
     let decode_mb = pps_to_mb(rt.block_on(pipeline_pps(0, 1))); // relay forward / dest receive: one peel
@@ -121,7 +121,7 @@ fn main() {
         let enc = ENCODE_US_BY_HOP[hops];
         let decodes = hops + 1;
         for enabled in [true, false] {
-            cpu::configure_arbitration(enabled, 75, 50);
+            cpu::with_arbitration(common::arbitration(enabled));
             let pps = rt.block_on(pipeline_pps(enc, decodes));
             println!(
                 "| {hops} | {enc}µs + {decodes}×{DECODE_US}µs | {} | {pps:.0} | {:.2} |",
