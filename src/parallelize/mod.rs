@@ -419,6 +419,11 @@ pub mod cpu {
     static RUNNING: AtomicUsize = AtomicUsize::new(0);
     /// Notified when a running task finishes (a pool slot frees) so a blocked decode admitter retries.
     static ARBITRATION_EVENT: event_listener::Event = event_listener::Event::new();
+    /// Set once the arbiter has been configured, so [`configure_arbitration_once`] is first-wins.
+    /// The arbiter is process-global; in a multi-node-per-process host (tests, the cluster example)
+    /// this stops a later node's pipeline startup from clobbering the arbiter for already-running
+    /// pipelines.
+    static ARBITRATION_CONFIGURED: AtomicBool = AtomicBool::new(false);
 
     /// Returns the number of tasks currently executing on a pool thread.
     #[inline]
@@ -431,10 +436,32 @@ pub mod cpu {
     /// `enabled` gates the whole mechanism. `occupancy_pct` is the pool-occupancy threshold below
     /// which decode is never throttled. `encode_reserve_pct` is the share of the pool decode yields
     /// to encode when both contend under saturation. Both percentages are clamped to `1..=100`.
+    ///
+    /// Applies unconditionally (last write wins) and marks the arbiter configured — use this for an
+    /// explicit process-level override (e.g. a benchmark toggling on/off). Node startup should prefer
+    /// [`configure_arbitration_once`] so it cannot clobber such an override or a peer pipeline.
     pub fn configure_arbitration(enabled: bool, occupancy_pct: u32, encode_reserve_pct: u32) {
         ARBITRATION_ENABLED.store(enabled, Ordering::Relaxed);
         ARBITRATION_OCCUPANCY_PCT.store(occupancy_pct.clamp(1, 100), Ordering::Relaxed);
         ARBITRATION_ENCODE_RESERVE_PCT.store(encode_reserve_pct.clamp(1, 100), Ordering::Relaxed);
+        ARBITRATION_CONFIGURED.store(true, Ordering::Release);
+    }
+
+    /// Configure arbitration only if it has not been configured yet, returning `true` if this call
+    /// applied the settings. Idempotent and first-wins: the arbiter is a single process-global, so a
+    /// per-node pipeline startup uses this to configure it once without overwriting an earlier
+    /// explicit [`configure_arbitration`] or another node's already-applied settings.
+    pub fn configure_arbitration_once(enabled: bool, occupancy_pct: u32, encode_reserve_pct: u32) -> bool {
+        if ARBITRATION_CONFIGURED
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return false; // already configured by an earlier call — leave it untouched
+        }
+        ARBITRATION_ENABLED.store(enabled, Ordering::Relaxed);
+        ARBITRATION_OCCUPANCY_PCT.store(occupancy_pct.clamp(1, 100), Ordering::Relaxed);
+        ARBITRATION_ENCODE_RESERVE_PCT.store(encode_reserve_pct.clamp(1, 100), Ordering::Relaxed);
+        true
     }
 
     /// Awaits until the decode path may submit without starving encode. Passthrough when arbitration
@@ -716,7 +743,10 @@ pub mod cpu {
     mod arbitration_tests {
         use std::sync::atomic::Ordering;
 
-        use super::{DECODE_OUTSTANDING, admit_decode, configure_arbitration, decode_admit_cap};
+        use super::{
+            ARBITRATION_CONFIGURED, ARBITRATION_ENABLED, DECODE_OUTSTANDING, admit_decode, configure_arbitration,
+            configure_arbitration_once, decode_admit_cap,
+        };
 
         const N: usize = 8;
         const OCC: u32 = 75; // occupancy threshold percent
@@ -790,6 +820,37 @@ pub mod cpu {
                 .expect("admit_decode must not block when disabled");
             DECODE_OUTSTANDING.fetch_sub(1, Ordering::Relaxed);
             configure_arbitration(true, OCC, RES); // restore default for other tests
+        }
+
+        /// `configure_arbitration_once` is first-wins: the first caller applies, later ones no-op, so
+        /// a per-node pipeline startup can never clobber the process-global arbiter of a peer.
+        #[test]
+        #[serial_test::serial] // mutates the process-global arbitration config
+        fn configure_arbitration_once_is_first_wins() {
+            ARBITRATION_CONFIGURED.store(false, Ordering::Release); // pretend a fresh process
+
+            assert!(configure_arbitration_once(false, OCC, RES), "first call must apply");
+            assert!(
+                !ARBITRATION_ENABLED.load(Ordering::Relaxed),
+                "first call's value must stick"
+            );
+
+            // A later differing call is ignored — the first configuration wins.
+            assert!(
+                !configure_arbitration_once(true, OCC, RES),
+                "second call must be a no-op"
+            );
+            assert!(
+                !ARBITRATION_ENABLED.load(Ordering::Relaxed),
+                "second call must not overwrite"
+            );
+
+            // An explicit `configure_arbitration` still overrides unconditionally (last-write-wins).
+            configure_arbitration(true, OCC, RES);
+            assert!(
+                ARBITRATION_ENABLED.load(Ordering::Relaxed),
+                "explicit config must override"
+            );
         }
     }
 }
