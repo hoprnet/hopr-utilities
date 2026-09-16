@@ -517,7 +517,6 @@ pub mod cpu {
             {
                 return true;
             }
-            // `dec` changed under us — recompute and retry.
         }
     }
 
