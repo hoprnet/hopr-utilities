@@ -161,6 +161,16 @@ name = "pool_arbiter_bench"
 harness = false
 required-features = ["parallelize-rayon"]
 
+[[bench]]
+name = "pool_arbiter_throughput"
+harness = false
+required-features = ["parallelize-rayon"]
+
+[[bench]]
+name = "pool_arbiter_hops"
+harness = false
+required-features = ["parallelize-rayon"]
+
 [package.metadata.cargo-shear]
 ignored = ["serde_bytes"]
 
