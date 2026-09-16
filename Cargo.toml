@@ -148,27 +148,32 @@ serde_json = "1.0.151"
 libc = { workspace = true, optional = true }
 
 [dev-dependencies]
-anyhow        = { workspace = true }
-assertables   = { workspace = true }
-criterion     = { version = "0.7", features = ["async_tokio"] }
+anyhow = { workspace = true }
+assertables = { workspace = true }
+criterion = { version = "0.7", features = ["async_tokio"] }
 parameterized = { workspace = true }
-serial_test   = { workspace = true }
-test-log      = { workspace = true }
-tokio         = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time"] }
+serial_test = { workspace = true }
+test-log = { workspace = true }
+tokio = { workspace = true, features = [
+  "macros",
+  "rt",
+  "rt-multi-thread",
+  "time",
+] }
 
 [[bench]]
-name = "pool_arbiter_bench"
-harness = false
+harness           = false
+name              = "pool_arbiter_bench"
 required-features = ["parallelize-rayon"]
 
 [[bench]]
-name = "pool_arbiter_throughput"
-harness = false
+harness           = false
+name              = "pool_arbiter_throughput"
 required-features = ["parallelize-rayon"]
 
 [[bench]]
-name = "pool_arbiter_hops"
-harness = false
+harness           = false
+name              = "pool_arbiter_hops"
 required-features = ["parallelize-rayon"]
 
 [package.metadata.cargo-shear]

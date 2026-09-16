@@ -132,7 +132,8 @@ fn main() {
     ];
 
     println!(
-        "\n## Real-weight throughput/latency matrix (enc={ENCODE_US}µs, dec={DECODE_US}µs, {PAYLOAD_BYTES}B/pkt, pool={PINNED_POOL}, {}ms)\n",
+        "\n## Real-weight throughput/latency matrix (enc={ENCODE_US}µs, dec={DECODE_US}µs, {PAYLOAD_BYTES}B/pkt, \
+         pool={PINNED_POOL}, {}ms)\n",
         WINDOW.as_millis()
     );
     println!("| scenario | arb | enc MB/s | dec MB/s | total MB/s | enc P50/P99 ms | dec P50/P99 ms |");
@@ -140,7 +141,7 @@ fn main() {
     let mb = |ops: u64, s: f64| ops as f64 * PAYLOAD_BYTES as f64 / (1024.0 * 1024.0) / s;
     for (label, enc, dec) in scenarios {
         for enabled in [true, false] {
-            cpu::configure_arbitration(enabled, 75, 50);
+            cpu::with_arbitration(common::arbitration(enabled));
             let r = rt.block_on(measure(*enc, *dec));
             let s = WINDOW.as_secs_f64();
             let (enc_mb, dec_mb) = (mb(r.enc.ops, s), mb(r.dec.ops, s));

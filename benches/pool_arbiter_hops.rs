@@ -4,15 +4,14 @@
 //!
 //! Two framings are reported, because they answer different questions:
 //!
-//!  1. **End-to-end session ceiling** (the headline): a delivered N-hop packet is encoded once at the
-//!     source and peeled once at each of the N relays + the destination — but those N+2 ops run on
-//!     *independent pools on different machines* that pipeline, so the achievable session throughput
-//!     is the **slowest single role**, `min(source-encode, relay-forward, dest-decode)`, NOT their
-//!     sum. Encode (SURB generation) is the expensive op, so ≥1-hop sessions are source-encode-bound
-//!     while relays forward with >2× headroom.
-//!  2. **Single-pool aggregate** (reference only): all `1 encode + (N+1) decodes` charged to one pool
-//!     — i.e. one machine doing the whole path's crypto. This is a lower bound, not session
-//!     throughput; it is the natural place to show the arbiter adds zero overhead (ON ≈ OFF).
+//!  1. **End-to-end session ceiling** (the headline): a delivered N-hop packet is encoded once at the source and peeled
+//!     once at each of the N relays + the destination — but those N+2 ops run on *independent pools on different
+//!     machines* that pipeline, so the achievable session throughput is the **slowest single role**,
+//!     `min(source-encode, relay-forward, dest-decode)`, NOT their sum. Encode (SURB generation) is the expensive op,
+//!     so ≥1-hop sessions are source-encode-bound while relays forward with >2× headroom.
+//!  2. **Single-pool aggregate** (reference only): all `1 encode + (N+1) decodes` charged to one pool — i.e. one
+//!     machine doing the whole path's crypto. This is a lower bound, not session throughput; it is the natural place to
+//!     show the arbiter adds zero overhead (ON ≈ OFF).
 //!
 //! Run: `cargo bench --features parallelize-rayon --bench pool_arbiter_hops`
 
@@ -69,7 +68,7 @@ fn main() {
         .unwrap();
     let pool = pool_size();
     let _ = cpu::init_thread_pool(pool);
-    cpu::configure_arbitration(true, 75, 50);
+    cpu::with_arbitration(common::arbitration(true));
 
     // ── Isolated per-role capacities (arbiter on; each role is a distinct machine's pool) ──────────
     let decode_mb = pps_to_mb(rt.block_on(pipeline_pps(0, 1))); // relay forward / dest receive: one peel
@@ -78,7 +77,8 @@ fn main() {
         .collect();
 
     println!(
-        "\n## Fully-engaged pool = {pool} threads, real busy-emulated SPHINX ops (dec={DECODE_US}µs, enc 0/1/2/3-hop = {:?}µs, 1020 B/pkt)\n",
+        "\n## Fully-engaged pool = {pool} threads, real busy-emulated SPHINX ops (dec={DECODE_US}µs, enc 0/1/2/3-hop \
+         = {:?}µs, 1020 B/pkt)\n",
         ENCODE_US_BY_HOP
     );
 
@@ -121,7 +121,7 @@ fn main() {
         let enc = ENCODE_US_BY_HOP[hops];
         let decodes = hops + 1;
         for enabled in [true, false] {
-            cpu::configure_arbitration(enabled, 75, 50);
+            cpu::with_arbitration(common::arbitration(enabled));
             let pps = rt.block_on(pipeline_pps(enc, decodes));
             println!(
                 "| {hops} | {enc}µs + {decodes}×{DECODE_US}µs | {} | {pps:.0} | {:.2} |",
