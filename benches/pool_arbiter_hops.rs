@@ -62,7 +62,11 @@ async fn pipeline_pps(enc_us: u64, decodes: usize) -> f64 {
 }
 
 fn main() {
-    let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(8).enable_all().build().unwrap();
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(8)
+        .enable_all()
+        .build()
+        .unwrap();
     let pool = pool_size();
     let _ = cpu::init_thread_pool(pool);
     cpu::configure_arbitration(true, 75, 50);
@@ -73,7 +77,10 @@ fn main() {
         .map(|h| pps_to_mb(rt.block_on(pipeline_pps(ENCODE_US_BY_HOP[h], 0))))
         .collect();
 
-    println!("\n## Fully-engaged pool = {pool} threads, real busy-emulated SPHINX ops (dec={DECODE_US}µs, enc 0/1/2/3-hop = {:?}µs, 1020 B/pkt)\n", ENCODE_US_BY_HOP);
+    println!(
+        "\n## Fully-engaged pool = {pool} threads, real busy-emulated SPHINX ops (dec={DECODE_US}µs, enc 0/1/2/3-hop = {:?}µs, 1020 B/pkt)\n",
+        ENCODE_US_BY_HOP
+    );
 
     println!("### Isolated per-role capacity (each role runs on its own pool)");
     println!("| role | pkts/s | MB/s |");
@@ -92,9 +99,17 @@ fn main() {
     for h in 0..=3 {
         let enc = encode_mb[h];
         let e2e = enc.min(decode_mb);
-        let bound = if enc <= decode_mb { "source encode" } else { "dest decode" };
+        let bound = if enc <= decode_mb {
+            "source encode"
+        } else {
+            "dest decode"
+        };
         // 0-hop has no relays; ≥1-hop relays forward at `decode_mb` each (never the bottleneck here).
-        let relay = if h == 0 { "—".to_string() } else { format!("{decode_mb:.2}") };
+        let relay = if h == 0 {
+            "—".to_string()
+        } else {
+            format!("{decode_mb:.2}")
+        };
         println!("| {h} | {enc:.2} | {relay} | **{e2e:.2}** | {bound} |");
     }
 

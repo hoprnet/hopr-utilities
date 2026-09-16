@@ -1,5 +1,5 @@
 //! Shared scaffolding for the `pool_arbiter_*` benches: the busy-spin emulator, the **measured**
-//! SPHINX op costs, the delivered-payload size, and the pinned pool sizing. Kept in one place so the
+//! SPHINX op costs, the delivered-payload size, and the production pool sizing. Kept in one place so the
 //! op-cost numbers — the load-bearing input to every scenario — have a single source of truth.
 //!
 //! Measured on this machine via `hopr-crypto-packet`'s `packet_bench` (criterion medians):
