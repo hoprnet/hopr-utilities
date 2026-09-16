@@ -140,7 +140,13 @@ assertables   = { workspace = true }
 parameterized = { workspace = true }
 serial_test   = { workspace = true }
 test-log      = { workspace = true }
-tokio         = { workspace = true, features = ["macros", "rt", "time"] }
+tokio         = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time"] }
+criterion     = { version = "0.7", features = ["async_tokio"] }
+
+[[bench]]
+name = "pool_arbiter_bench"
+harness = false
+required-features = ["parallelize-rayon"]
 
 [package.metadata.cargo-shear]
 ignored = ["serde_bytes"]
