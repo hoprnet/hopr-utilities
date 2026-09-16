@@ -38,19 +38,38 @@ pub enum ArbitrationConfig {
     },
 }
 
+/// A percentage in an [`ArbitrationConfig::Enabled`] fell outside `1..=100`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum ArbitrationConfigError {
+    /// `occupancy_pct` was out of range.
+    #[error("occupancy_pct must be in 1..=100, got {0}")]
+    OccupancyOutOfRange(u32),
+    /// `encode_reserve_pct` was out of range.
+    #[error("encode_reserve_pct must be in 1..=100, got {0}")]
+    EncodeReserveOutOfRange(u32),
+}
+
 impl ArbitrationConfig {
     /// Both percentages must lie in `1..=100` when arbitration is enabled.
-    pub fn validate(&self) -> Result<(), &'static str> {
+    ///
+    /// # Examples
+    /// ```
+    /// # use hopr_utilities::parallelize::cpu::ArbitrationConfig;
+    /// assert!(ArbitrationConfig::Disabled.validate().is_ok());
+    /// assert!(ArbitrationConfig::Enabled { occupancy_pct: 75, encode_reserve_pct: 50 }.validate().is_ok());
+    /// assert!(ArbitrationConfig::Enabled { occupancy_pct: 0, encode_reserve_pct: 50 }.validate().is_err());
+    /// ```
+    pub fn validate(&self) -> Result<(), ArbitrationConfigError> {
         if let ArbitrationConfig::Enabled {
             occupancy_pct,
             encode_reserve_pct,
         } = self
         {
             if !(1..=100).contains(occupancy_pct) {
-                return Err("occupancy_pct must be in 1..=100");
+                return Err(ArbitrationConfigError::OccupancyOutOfRange(*occupancy_pct));
             }
             if !(1..=100).contains(encode_reserve_pct) {
-                return Err("encode_reserve_pct must be in 1..=100");
+                return Err(ArbitrationConfigError::EncodeReserveOutOfRange(*encode_reserve_pct));
             }
         }
         Ok(())
@@ -91,6 +110,10 @@ fn apply(config: ArbitrationConfig) {
             ARBITRATION_ENABLED.store(true, Ordering::Relaxed);
         }
     }
+    // A live policy change (e.g. an explicit `with_arbitration(Disabled)` override) must wake every
+    // blocked decode admitter: they re-evaluate the gate on wake, so a disable or a loosened cap
+    // takes effect immediately instead of stranding them under the previous policy.
+    ARBITRATION_EVENT.notify(usize::MAX);
 }
 
 /// Configure the arbiter. Call once at startup, next to [`super::init_thread_pool`].
@@ -130,11 +153,21 @@ pub(super) async fn admit_decode() {
     let occupancy_pct = ARBITRATION_OCCUPANCY_PCT.load(Ordering::Relaxed);
     let reserve_pct = ARBITRATION_ENCODE_RESERVE_PCT.load(Ordering::Relaxed);
     loop {
+        // Re-check on every iteration: `with_arbitration(Disabled)` can turn the arbiter off while
+        // this admitter is blocked, and `apply` wakes us to observe it here (pass straight through).
+        if !ARBITRATION_ENABLED.load(Ordering::Relaxed) {
+            DECODE_OUTSTANDING.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
         if try_reserve_decode(pool_threads, occupancy_pct, reserve_pct) {
             return;
         }
-        // Register before re-checking so a slot freed in between is not missed.
+        // Register before re-checking so a slot freed — or a disable — in between is not missed.
         let listener = ARBITRATION_EVENT.listen();
+        if !ARBITRATION_ENABLED.load(Ordering::Relaxed) {
+            DECODE_OUTSTANDING.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
         if try_reserve_decode(pool_threads, occupancy_pct, reserve_pct) {
             return;
         }
