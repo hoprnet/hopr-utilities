@@ -389,35 +389,34 @@ pub mod cpu {
         ENCODE_TIMEOUT_DROPS.load(Ordering::Relaxed)
     }
 
-    /// RAII guard that decrements a tagged outstanding counter when dropped.
-    ///
-    /// Caller must increment the counter before constructing this guard.
-    struct TaggedGuard(&'static AtomicUsize);
+    // ───────────────────────── encode/decode pool arbitration ─────────────────────────
+    // The arbiter lives in its own module; see `cpu/arbitration.rs` for the policy and rationale.
+    mod arbitration;
 
-    impl Drop for TaggedGuard {
-        #[inline]
-        fn drop(&mut self) {
-            self.0.fetch_sub(1, Ordering::Relaxed);
-        }
-    }
+    pub use arbitration::{ArbitrationConfig, running_tasks, with_arbitration, with_arbitration_once};
 
     /// Like [`spawn_fifo_blocking`] but also tracks the task in [`ENCODE_OUTSTANDING`].
+    ///
+    /// Encode is the protected class: it is never throttled by arbitration.
     pub async fn spawn_encode_blocking<R: Send + 'static>(
         f: impl FnOnce() -> R + Send + 'static,
         operation: &'static str,
     ) -> Result<R, SpawnError> {
         ENCODE_OUTSTANDING.fetch_add(1, Ordering::Relaxed);
-        let _guard = TaggedGuard(&ENCODE_OUTSTANDING);
+        let _guard = arbitration::TaggedGuard::new(&ENCODE_OUTSTANDING);
         spawn_fifo_blocking(f, operation).await
     }
 
-    /// Like [`spawn_fifo_blocking`] but also tracks the task in [`DECODE_OUTSTANDING`].
+    /// Like [`spawn_fifo_blocking`] but also tracks the task in [`DECODE_OUTSTANDING`] and yields a
+    /// fair-share pool slot to encode first when the pool is saturated (see [`arbitration`]).
     pub async fn spawn_decode_blocking<R: Send + 'static>(
         f: impl FnOnce() -> R + Send + 'static,
         operation: &'static str,
     ) -> Result<R, SpawnError> {
-        DECODE_OUTSTANDING.fetch_add(1, Ordering::Relaxed);
-        let _guard = TaggedGuard(&DECODE_OUTSTANDING);
+        // `admit_decode` atomically reserves the `DECODE_OUTSTANDING` slot (waiting first if decode is
+        // over its fair-share cap); `TaggedGuard` releases it on completion.
+        arbitration::admit_decode().await;
+        let _guard = arbitration::TaggedGuard::new(&DECODE_OUTSTANDING);
         spawn_fifo_blocking(f, operation).await
     }
 
@@ -463,6 +462,8 @@ pub mod cpu {
             let wait_duration = submitted_at.elapsed();
             metrics::observe_queue_wait(wait_duration.as_secs_f64());
 
+            // Mark this task as occupying a pool thread for the duration of `f` (drops after it).
+            let _running = arbitration::RunningGuard::enter();
             let execution_start = std::time::Instant::now();
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
             metrics::observe_execution(operation, execution_start.elapsed().as_secs_f64());

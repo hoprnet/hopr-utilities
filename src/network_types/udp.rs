@@ -797,12 +797,13 @@ mod tests {
 
         assert!(
             bounded < FLOOD,
-            "the 256-slot queue must drop under sustained flood (bounded delay, then loss); retained {bounded} of {FLOOD}"
+            "the 256-slot queue must drop under sustained flood (bounded delay, then loss); retained {bounded} of \
+             {FLOOD}"
         );
         assert!(
             original > bounded + 4000,
-            "the 8192-slot queue must retain far more than the 256-slot one (kernel buffer cancels): \
-             256 -> {bounded}, 8192 -> {original}"
+            "the 8192-slot queue must retain far more than the 256-slot one (kernel buffer cancels): 256 -> \
+             {bounded}, 8192 -> {original}"
         );
         Ok(())
     }
