@@ -393,7 +393,9 @@ pub mod cpu {
     // The arbiter lives in its own module; see `cpu/arbitration.rs` for the policy and rationale.
     mod arbitration;
 
-    pub use arbitration::{ArbitrationConfig, running_tasks, with_arbitration, with_arbitration_once};
+    pub use arbitration::{
+        ArbitrationConfig, ArbitrationConfigError, running_tasks, with_arbitration, with_arbitration_once,
+    };
 
     /// Like [`spawn_fifo_blocking`] but also tracks the task in [`ENCODE_OUTSTANDING`].
     ///

@@ -164,8 +164,6 @@ pub(super) async fn admit_decode() {
         DECODE_OUTSTANDING.fetch_add(1, Ordering::Relaxed);
         return;
     }
-    let occupancy_pct = ARBITRATION_OCCUPANCY_PCT.load(Ordering::Relaxed);
-    let reserve_pct = ARBITRATION_ENCODE_RESERVE_PCT.load(Ordering::Relaxed);
     loop {
         // Re-check on every iteration: `with_arbitration(Disabled)` can turn the arbiter off while
         // this admitter is blocked, and `apply` wakes us to observe it here (pass straight through).
@@ -173,6 +171,11 @@ pub(super) async fn admit_decode() {
             DECODE_OUTSTANDING.fetch_add(1, Ordering::Relaxed);
             return;
         }
+        // Re-read the caps here too: a live `with_arbitration` can loosen or tighten them while we are
+        // parked, and `apply` wakes us — reading once before the loop would recompute against a stale
+        // cap and defeat the "a loosened cap takes effect immediately" guarantee.
+        let occupancy_pct = ARBITRATION_OCCUPANCY_PCT.load(Ordering::Relaxed);
+        let reserve_pct = ARBITRATION_ENCODE_RESERVE_PCT.load(Ordering::Relaxed);
         if try_reserve_decode(pool_threads, occupancy_pct, reserve_pct) {
             return;
         }
