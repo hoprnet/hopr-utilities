@@ -11,7 +11,7 @@ name         = "hopr-utilities"
 readme       = "README.md"
 repository   = "https://github.com/hoprnet/hopr-utilities"
 rust-version = "1.97"
-version      = "0.16.0"
+version      = "0.17.0"
 
 [lints.rust]
 # `tokio_unstable` gates the cooperative-yield (`tokio::task::coop`) code paths; declare it so the
@@ -240,12 +240,12 @@ tokio-util = { version = "0.7.19", default-features = false, features = [
 tracing = { version = "0.1.44", features = ["release_max_level_debug"] }
 
 # --- HOPR crates (crates.io) ---
-hopr-api = { version = "4.3.0", features = [
+hopr-api = { version = "5.0.0", features = [
   "node",
   "types-internal",
   "types-with-bindings",
 ] }
-hopr-types = { version = "4.0.1", features = ["use-bindings"] }
+hopr-types = { version = "5.0.0", features = ["use-bindings"] }
 
 # Points at the branches carrying the compact/expanded `OffchainPublicKey` split
 # (hopr-types#52). Drop these once hopr-types 5.0 and hopr-api are published.
