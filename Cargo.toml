@@ -246,3 +246,9 @@ hopr-api = { version = "4.3.0", features = [
   "types-with-bindings",
 ] }
 hopr-types = { version = "4.0.1", features = ["use-bindings"] }
+
+# Points at the branches carrying the compact/expanded `OffchainPublicKey` split
+# (hopr-types#52). Drop these once hopr-types 5.0 and hopr-api are published.
+[patch.crates-io]
+hopr-types = { git = "https://github.com/hoprnet/hopr-types", branch = "lukas/extended-offchain-key" }
+hopr-api = { git = "https://github.com/hoprnet/hopr-api", branch = "lukas/extended-offchain-key" }
