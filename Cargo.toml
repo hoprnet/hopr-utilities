@@ -194,7 +194,7 @@ async-broadcast = "0.7.2"
 async-lock = "3.4.2"
 async-trait = "0.1.92"
 auto_impl = "1.3.0"
-blokli-client = "0.33.1"
+blokli-client = "0.33.2"
 crossfire = { version = "3.1.20", default-features = false }
 dashmap = "6.2.1"
 event-listener = "5.4.2"
@@ -216,10 +216,10 @@ libp2p-identity = { version = "0.3.0", features = [
   "rand",
 ] }
 multiaddr = "0.19.0"
-parameterized = "2.0.0"
+parameterized = "2.1.0"
 pcap-file = "2.0.0"
 pin-project = "1.1.13"
-rand = { version = "0.10.2", features = ["thread_rng"] }
+rand = { version = "0.10.3", features = ["thread_rng"] }
 rayon = "1.12.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_bytes = "0.11.19"
