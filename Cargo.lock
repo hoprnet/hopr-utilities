@@ -3508,7 +3508,7 @@ dependencies = [
  "k256 0.14.0",
  "lazy_static",
  "libp2p-identity 0.2.14",
- "multiaddr 0.18.2",
+ "multiaddr",
  "num_enum",
  "opentelemetry",
  "opentelemetry-prometheus-text-exporter",
@@ -3561,7 +3561,7 @@ dependencies = [
  "lazy_static",
  "libc",
  "libp2p-identity 0.3.0",
- "multiaddr 0.19.0",
+ "multiaddr",
  "parameterized",
  "pcap-file",
  "pin-project",
@@ -4408,26 +4408,6 @@ dependencies = [
  "byteorder",
  "data-encoding",
  "libp2p-identity 0.2.14",
- "multibase",
- "multihash",
- "percent-encoding",
- "serde",
- "static_assertions",
- "unsigned-varint",
- "url",
-]
-
-[[package]]
-name = "multiaddr"
-version = "0.19.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d96879ec0057cf5f99543c5333f6818c1473081684ae7ad55da21b6ea65ba214"
-dependencies = [
- "arrayref",
- "byteorder",
- "bytes",
- "data-encoding",
- "libp2p-identity 0.3.0",
  "multibase",
  "multihash",
  "percent-encoding",
