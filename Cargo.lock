@@ -3438,9 +3438,9 @@ dependencies = [
 
 [[package]]
 name = "hopr-api"
-version = "4.3.0"
+version = "4.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "750c02e904f0a6156b7da0e7324ed19b59fdbc51656d18bb82ec5e009485aff0"
+checksum = "b727b4f85fe015dbc8444b45c14240841bf03f29f62c4b944406a3c1e64c0a7e"
 dependencies = [
  "async-trait",
  "atomic_enum",
@@ -3449,7 +3449,7 @@ dependencies = [
  "futures",
  "futures-concurrency",
  "hopr-types",
- "libp2p-identity 0.2.14",
+ "libp2p-identity 0.3.0",
  "strum",
  "thiserror 2.0.20",
  "tracing",
@@ -3475,9 +3475,9 @@ dependencies = [
 
 [[package]]
 name = "hopr-types"
-version = "4.0.1"
+version = "4.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c46c3109d786f2688fa712240720a0ada428d99382eb2b76a996ee7ea33ba188"
+checksum = "9edbc7eef689f0dde57fb481404f15b671f0877dd75ff1e88c125f19a09efaf7"
 dependencies = [
  "aes",
  "anyhow",
