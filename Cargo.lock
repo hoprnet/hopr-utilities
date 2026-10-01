@@ -3449,7 +3449,7 @@ dependencies = [
  "futures",
  "futures-concurrency",
  "hopr-types",
- "libp2p-identity 0.2.14",
+ "libp2p-identity",
  "strum",
  "thiserror 2.0.20",
  "tracing",
@@ -3507,7 +3507,7 @@ dependencies = [
  "hybrid-array",
  "k256 0.14.0",
  "lazy_static",
- "libp2p-identity 0.2.14",
+ "libp2p-identity",
  "multiaddr",
  "num_enum",
  "opentelemetry",
@@ -3560,7 +3560,7 @@ dependencies = [
  "indexmap 2.14.2",
  "lazy_static",
  "libc",
- "libp2p-identity 0.3.0",
+ "libp2p-identity",
  "multiaddr",
  "parameterized",
  "pcap-file",
@@ -4224,25 +4224,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "libp2p-identity"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3d77f16caa4f4d2667a1fad5bb1a3a4a4556967c1bff93525ebb2975847fa3de"
-dependencies = [
- "bs58",
- "ed25519-dalek 3.0.0",
- "hkdf 0.13.0",
- "multihash",
- "prost",
- "rand 0.10.3",
- "serde",
- "sha2 0.11.0",
- "thiserror 2.0.20",
- "tracing",
- "zeroize",
-]
-
-[[package]]
 name = "linux-raw-sys"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4407,7 +4388,7 @@ dependencies = [
  "arrayref",
  "byteorder",
  "data-encoding",
- "libp2p-identity 0.2.14",
+ "libp2p-identity",
  "multibase",
  "multihash",
  "percent-encoding",
