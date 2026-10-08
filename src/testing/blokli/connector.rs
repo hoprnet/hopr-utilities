@@ -361,6 +361,7 @@ where
                 ChannelStatus::PendingToClose(hopr_api::chain::DateTime::from_str(&closure_time.0)?.into())
             }
             blokli_client::api::types::ChannelStatus::Closed => ChannelStatus::Closed,
+            _ => return Err(anyhow::anyhow!("unknown channel status: {:?}", model.status)),
         };
 
         Ok(ChannelBuilder::default()
