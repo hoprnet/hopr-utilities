@@ -218,6 +218,25 @@ impl BlokliTestStateMutator for FullStateEmulator {
                     }
                 }
             }
+            ParsedHoprChainAction::Approve(spender, amount, payer) => {
+                // Only the allowance a Safe grants to the Channels contract is part of the state.
+                // An approval made by the EOA itself, or for any other spender, changes nothing here.
+                let channels = Address::from(<[u8; 20]>::from(addresses.channels));
+                if *payer != Payer::Safe || *spender != channels {
+                    tracing::debug!(%sender, ?payer, %spender, %amount, "ignoring approval that is not the Safe allowance to Channels");
+                    return Ok(());
+                }
+
+                let safe_allowance = state.get_account_safe_allowance_mut(&sender.into()).ok_or(
+                    blokli_client::errors::ErrorKind::MockClientError(anyhow::anyhow!(
+                        "missing safe allowance for {sender}"
+                    )),
+                )?;
+
+                // `approve` sets the allowance to the given amount, it does not add to it.
+                safe_allowance.allowance = blokli_client::api::types::TokenValueString(amount.to_string());
+                tracing::debug!(%sender, %amount, "safe allowance to channels set");
+            }
             ParsedHoprChainAction::FundChannel(dst_addr, stake) => {
                 let source = state.get_account(&sender.into()).cloned().ok_or(
                     blokli_client::errors::ErrorKind::MockClientError(anyhow::anyhow!("missing account for {sender}")),

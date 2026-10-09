@@ -1583,9 +1583,8 @@ dependencies = [
 
 [[package]]
 name = "blokli-client"
-version = "0.35.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8478d012a20a01bd39c6b0033e6794f6a98d5ac2819d8c89264db02fc251e84c"
+version = "0.35.1"
+source = "git+https://github.com/hoprnet/blokli-client?branch=q-core-1024-jura-prod-safes-wxhopr-allowance-exhausted-all-channel#f9aedb948475b90a413894a7486c71c4cbed4b6f"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -3438,9 +3437,8 @@ dependencies = [
 
 [[package]]
 name = "hopr-api"
-version = "4.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "20b3701bf6462bff1b49a5f37d148e79b73174ae111046c65d3c723c6372f29a"
+version = "4.3.3"
+source = "git+https://github.com/hoprnet/hopr-api?branch=q-core-1024-jura-prod-safes-wxhopr-allowance-exhausted-all-channel#8bf698f71ec698f53cff60d4df8d1e70992f15a0"
 dependencies = [
  "async-trait",
  "atomic_enum",
@@ -3475,9 +3473,8 @@ dependencies = [
 
 [[package]]
 name = "hopr-types"
-version = "4.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9edbc7eef689f0dde57fb481404f15b671f0877dd75ff1e88c125f19a09efaf7"
+version = "4.1.1"
+source = "git+https://github.com/hoprnet/hopr-types?branch=q-core-1024-jura-prod-safes-wxhopr-allowance-exhausted-all-channel#5df6f2be99433dcb506b79fc11f49583784eab92"
 dependencies = [
  "aes",
  "anyhow",
@@ -3536,7 +3533,7 @@ dependencies = [
 
 [[package]]
 name = "hopr-utilities"
-version = "0.17.3"
+version = "0.18.0"
 dependencies = [
  "anyhow",
  "arrayvec",
