@@ -1583,9 +1583,8 @@ dependencies = [
 
 [[package]]
 name = "blokli-client"
-version = "0.35.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8478d012a20a01bd39c6b0033e6794f6a98d5ac2819d8c89264db02fc251e84c"
+version = "0.35.1"
+source = "git+https://github.com/hoprnet/blokli-client?rev=3dee40324c5dbce6425a6b3b806139c09c3f0daf#3dee40324c5dbce6425a6b3b806139c09c3f0daf"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -1598,7 +1597,7 @@ dependencies = [
  "futures",
  "futures-time",
  "hex",
- "hopr-types",
+ "hopr-types 4.1.0",
  "http",
  "indexmap 2.14.2",
  "launchdarkly-sdk-transport",
@@ -3438,9 +3437,8 @@ dependencies = [
 
 [[package]]
 name = "hopr-api"
-version = "4.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "20b3701bf6462bff1b49a5f37d148e79b73174ae111046c65d3c723c6372f29a"
+version = "4.3.3"
+source = "git+https://github.com/hoprnet/hopr-api?rev=63c118a0e7d4ec860d7ca734cc3f773283316010#63c118a0e7d4ec860d7ca734cc3f773283316010"
 dependencies = [
  "async-trait",
  "atomic_enum",
@@ -3448,7 +3446,7 @@ dependencies = [
  "chrono",
  "futures",
  "futures-concurrency",
- "hopr-types",
+ "hopr-types 4.1.0",
  "libp2p-identity",
  "strum",
  "thiserror 2.0.20",
@@ -3478,6 +3476,62 @@ name = "hopr-types"
 version = "4.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9edbc7eef689f0dde57fb481404f15b671f0877dd75ff1e88c125f19a09efaf7"
+dependencies = [
+ "aes",
+ "anyhow",
+ "aquamarine",
+ "ark-bn254 0.6.0",
+ "ark-ec 0.6.0",
+ "ark-ff 0.6.0",
+ "ark-serialize 0.6.0",
+ "arrayvec",
+ "async-trait",
+ "babyjubjub-ec",
+ "bigdecimal",
+ "blake3",
+ "chacha20",
+ "chrono",
+ "cipher",
+ "const-hex",
+ "ctr",
+ "curve25519-dalek 5.0.0",
+ "digest 0.11.3",
+ "ed25519-dalek 3.0.0",
+ "elliptic-curve 0.14.1",
+ "float-cmp",
+ "hash2curve",
+ "hex-literal",
+ "hopr-bindings",
+ "hybrid-array",
+ "k256 0.14.0",
+ "lazy_static",
+ "libp2p-identity",
+ "multiaddr",
+ "num_enum",
+ "poly1305",
+ "primitive-types 0.14.0",
+ "rand 0.10.3",
+ "rayon",
+ "regex",
+ "rlp 0.6.1",
+ "secp256k1 0.31.1",
+ "serde",
+ "serde_with",
+ "sha2 0.11.0",
+ "sha3 0.12.0",
+ "smart-default",
+ "strum",
+ "subtle",
+ "thiserror 2.0.20",
+ "tracing",
+ "typenum",
+ "zeroize",
+]
+
+[[package]]
+name = "hopr-types"
+version = "4.1.1"
+source = "git+https://github.com/hoprnet/hopr-types?rev=5df6f2be99433dcb506b79fc11f49583784eab92#5df6f2be99433dcb506b79fc11f49583784eab92"
 dependencies = [
  "aes",
  "anyhow",
@@ -3556,7 +3610,7 @@ dependencies = [
  "futures-time",
  "hickory-resolver",
  "hopr-api",
- "hopr-types",
+ "hopr-types 4.1.1",
  "indexmap 2.14.2",
  "lazy_static",
  "libc",
