@@ -249,5 +249,5 @@ hopr-types = { version = "4.1.0", features = ["use-bindings"] }
 
 [patch.crates-io]
 blokli-client = { git = "https://github.com/hoprnet/blokli-client", branch = "q-core-1024-jura-prod-safes-wxhopr-allowance-exhausted-all-channel" }
-hopr-api = { git = "https://github.com/hoprnet/hopr-api", branch = "q-core-1024-jura-prod-safes-wxhopr-allowance-exhausted-all-channel" }
-hopr-types = { git = "https://github.com/hoprnet/hopr-types", branch = "q-core-1024-jura-prod-safes-wxhopr-allowance-exhausted-all-channel" }
+hopr-api      = { git = "https://github.com/hoprnet/hopr-api", branch = "q-core-1024-jura-prod-safes-wxhopr-allowance-exhausted-all-channel" }
+hopr-types    = { git = "https://github.com/hoprnet/hopr-types", branch = "q-core-1024-jura-prod-safes-wxhopr-allowance-exhausted-all-channel" }
