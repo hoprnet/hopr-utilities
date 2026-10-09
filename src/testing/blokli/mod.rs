@@ -505,6 +505,113 @@ mod tests {
         assert!(state.services.is_empty());
     }
 
+    /// Safe approvals in [`FullStateEmulator`].
+    ///
+    /// Only the allowance a Safe grants to the Channels contract is part of the emulated state, and
+    /// `approve` sets it to the given amount rather than adding to it.
+    mod safe_approval {
+        use blokli_client::api::{BlokliQueryClient, BlokliSubscriptionClient, BlokliTransactionClient};
+        use futures::StreamExt;
+        use hopr_api::types::{
+            chain::{
+                ContractAddresses,
+                payload::{BasicPayloadGenerator, PayloadGenerator, SafePayloadGenerator, SignableTransaction},
+            },
+            crypto::prelude::ChainKeypair,
+        };
+
+        use super::*;
+
+        const NETWORK: &str = "piz-palu-staging";
+        const MODULE: [u8; Address::SIZE] = [0x11u8; Address::SIZE];
+        const SAFE: [u8; Address::SIZE] = [0x5au8; Address::SIZE];
+
+        fn contracts() -> ContractAddresses {
+            contract_addresses_for_network(NETWORK)
+                .expect("network name not found")
+                .1
+        }
+
+        fn channels() -> Address {
+            Address::from(<[u8; Address::SIZE]>::from(contracts().channels))
+        }
+
+        fn fixture(allowance: HoprBalance) -> (BlokliTestClient<FullStateEmulator>, ChainKeypair) {
+            let node_key = ChainKeypair::random();
+            let client = BlokliTestStateBuilder::default()
+                .with_hopr_network_chain_info(NETWORK)
+                .with_accounts([(
+                    AccountEntry {
+                        public_key: *OffchainKeypair::random().public(),
+                        chain_addr: node_key.public().to_address(),
+                        entry_type: AccountType::NotAnnounced,
+                        safe_address: Some(SAFE.into()),
+                        key_id: 0u32.into(),
+                    },
+                    HoprBalance::new_base(1000),
+                    XDaiBalance::new_base(1),
+                )])
+                .with_safe_allowances([(SAFE.into(), allowance)])
+                .build_dynamic_client(MODULE.into())
+                .with_tx_simulation_delay(std::time::Duration::ZERO);
+            (client, node_key)
+        }
+
+        async fn allowance(client: &BlokliTestClient<FullStateEmulator>) -> anyhow::Result<HoprBalance> {
+            Ok(client.query_safe_allowance(&SAFE).await?.allowance.0.parse()?)
+        }
+
+        #[tokio::test]
+        async fn safe_approval_sets_the_absolute_allowance_and_notifies_subscribers() -> anyhow::Result<()> {
+            let (client, node_key) = fixture(HoprBalance::new_base(3));
+            let mut approvals = client.subscribe_safe_hopr_approval(SAFE)?;
+            let generator = SafePayloadGenerator::new(&node_key, contracts(), MODULE.into());
+
+            for (nonce, amount) in [(0, 500), (1, 20)] {
+                let signed = generator
+                    .approve(channels(), HoprBalance::new_base(amount))?
+                    .sign_and_encode_to_eip2718(nonce, 1, None, &node_key)
+                    .await?;
+                client.submit_and_confirm_transaction(&signed, 1).await?;
+                assert_eq!(allowance(&client).await?, HoprBalance::new_base(amount));
+            }
+
+            let updates = approvals
+                .by_ref()
+                .take(3)
+                .map(|approval| approval.map(|approval| approval.allowance.0))
+                .collect::<Vec<_>>()
+                .await
+                .into_iter()
+                .collect::<Result<Vec<_>, _>>()?;
+            assert_eq!(updates, vec!["3 wxHOPR", "500 wxHOPR", "20 wxHOPR"]);
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn other_approvals_do_not_change_the_safe_allowance() -> anyhow::Result<()> {
+            let (client, node_key) = fixture(HoprBalance::new_base(3));
+            let node = node_key.public().to_address();
+
+            // Approval of another spender, through the Safe.
+            let signed = SafePayloadGenerator::new(&node_key, contracts(), MODULE.into())
+                .approve([0x42u8; Address::SIZE].into(), HoprBalance::new_base(500))?
+                .sign_and_encode_to_eip2718(0, 1, None, &node_key)
+                .await?;
+            client.submit_and_confirm_transaction(&signed, 1).await?;
+
+            // Approval of Channels by the node's own key, not by the Safe.
+            let signed = BasicPayloadGenerator::new(node, contracts())
+                .approve(channels(), HoprBalance::new_base(500))?
+                .sign_and_encode_to_eip2718(1, 1, None, &node_key)
+                .await?;
+            client.submit_and_confirm_transaction(&signed, 1).await?;
+
+            assert_eq!(allowance(&client).await?, HoprBalance::new_base(3));
+            Ok(())
+        }
+    }
+
     /// Withdrawal attribution in [`FullStateEmulator`].
     ///
     /// A `SafePayloadGenerator` transfer is signed by the node key but executed by the Safe through
