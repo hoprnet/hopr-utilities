@@ -240,9 +240,9 @@ tokio-util = { version = "0.7.19", default-features = false, features = [
 tracing = { version = "0.1.44", features = ["release_max_level_debug"] }
 
 # --- HOPR crates (crates.io) ---
-hopr-api = { git = "https://github.com/hoprnet/hopr-api", rev = "63c118a0e7d4ec860d7ca734cc3f773283316010", features = [
+hopr-api = { git = "https://github.com/hoprnet/hopr-api", branch = "q-core-1024-jura-prod-safes-wxhopr-allowance-exhausted-all-channel", features = [
   "node",
   "types-internal",
   "types-with-bindings",
 ] }
-hopr-types = { git = "https://github.com/hoprnet/hopr-types", rev = "5df6f2be99433dcb506b79fc11f49583784eab92", features = ["use-bindings"] }
+hopr-types = { git = "https://github.com/hoprnet/hopr-types", branch = "q-core-1024-jura-prod-safes-wxhopr-allowance-exhausted-all-channel", features = ["use-bindings"] }
