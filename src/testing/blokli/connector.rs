@@ -182,7 +182,9 @@ where
         (*self.client).clone()
     }
 
-    /// Loads initial state via finite queries and spawns a background task for live event forwarding.
+    /// Loads initial state via finite queries and spawns background tasks for live event forwarding.
+    ///
+    /// One task forwards graph updates; another forwards the registered Safe's allowance updates.
     pub async fn connect(&mut self) -> anyhow::Result<()> {
         // Fetch chain info to initialize the payload generator and cache ticket values.
         let chain_info_raw = self.client.query_chain_info().await?;
