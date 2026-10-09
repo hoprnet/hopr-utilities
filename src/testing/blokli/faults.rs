@@ -44,6 +44,8 @@ pub enum ChainOp {
     /// `ChainWriteChannelOperations::close_channel`, which both initiates and
     /// finalizes a closure depending on the channel's status.
     CloseChannel,
+    /// `ChainWriteSafeOperations::set_safe_allowance`.
+    SetSafeAllowance,
 }
 
 /// Chain event kinds that [`ChainFaults`] can withhold from subscribers.
@@ -62,6 +64,8 @@ pub enum EventKind {
     Closed,
     /// `ChainEvent::TicketRedeemed`.
     TicketRedeemed,
+    /// `ChainEvent::SafeAllowanceChanged`.
+    SafeAllowanceChanged,
 }
 
 impl EventKind {
@@ -73,6 +77,7 @@ impl EventKind {
             ChainEvent::ChannelClosureInitiated(_) => Some(Self::ClosureInitiated),
             ChainEvent::ChannelClosed(_) => Some(Self::Closed),
             ChainEvent::TicketRedeemed(..) => Some(Self::TicketRedeemed),
+            ChainEvent::SafeAllowanceChanged(..) => Some(Self::SafeAllowanceChanged),
             _ => None,
         }
     }

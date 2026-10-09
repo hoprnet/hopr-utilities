@@ -589,6 +589,37 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn test_connector_sets_the_allowance_and_reports_the_change() -> anyhow::Result<()> {
+            use hopr_api::chain::{ChainEvent, ChainEvents, ChainReadSafeOperations, ChainWriteSafeOperations};
+
+            let (client, node_key) = fixture(HoprBalance::new_base(3));
+            let connector = super::super::create_test_blokli_connector(&node_key, client, MODULE.into()).await?;
+            let mut events = Box::pin(connector.subscribe()?);
+
+            connector.set_safe_allowance(HoprBalance::new_base(500)).await?.await?;
+
+            let allowance: HoprBalance = connector.safe_allowance(Address::from(SAFE)).await?;
+            assert_eq!(allowance, HoprBalance::new_base(500));
+            let event = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                loop {
+                    match events.next().await {
+                        // The current allowance may be reported first, depending on scheduling.
+                        Some(ChainEvent::SafeAllowanceChanged(safe, allowance))
+                            if allowance != HoprBalance::new_base(3) =>
+                        {
+                            break Some((safe, allowance));
+                        }
+                        Some(_) => continue,
+                        None => break None,
+                    }
+                }
+            })
+            .await?;
+            assert_eq!(event, Some((Address::from(SAFE), HoprBalance::new_base(500))));
+            Ok(())
+        }
+
+        #[tokio::test]
         async fn other_approvals_do_not_change_the_safe_allowance() -> anyhow::Result<()> {
             let (client, node_key) = fixture(HoprBalance::new_base(3));
             let node = node_key.public().to_address();

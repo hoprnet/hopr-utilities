@@ -228,6 +228,41 @@ where
             self.channels.insert(channel_id, channel);
         }
 
+        // Forward the allowance updates of this node's Safe as `SafeAllowanceChanged` events.
+        // The first update is the current allowance; repeated values are not forwarded.
+        if let Some(safe) = self
+            .accounts
+            .get(&self.my_addr)
+            .and_then(|account| account.safe_address)
+        {
+            match self.client.subscribe_safe_hopr_approval(safe.into()) {
+                Ok(approvals) => {
+                    let events_tx = self.events.0.clone();
+                    crate::runtime::prelude::spawn(async move {
+                        let mut previous: Option<HoprBalance> = None;
+                        futures::pin_mut!(approvals);
+                        while let Some(approval) = approvals.next().await {
+                            let allowance = match approval
+                                .map_err(anyhow::Error::from)
+                                .and_then(|approval| Ok::<HoprBalance, anyhow::Error>(approval.allowance.0.parse()?))
+                            {
+                                Ok(allowance) => allowance,
+                                Err(error) => {
+                                    tracing::error!(%error, "safe allowance stream error in background event loop");
+                                    break;
+                                }
+                            };
+                            if previous.replace(allowance) != Some(allowance) {
+                                let _ = events_tx
+                                    .try_broadcast(hopr_api::chain::ChainEvent::SafeAllowanceChanged(safe, allowance));
+                            }
+                        }
+                    });
+                }
+                Err(error) => tracing::error!(%error, "subscribe_safe_hopr_approval() failed"),
+            }
+        }
+
         // Spawn a background task that forwards live graph updates as ChainEvents.
         // subscribe_graph() emits an initial snapshot (already loaded above) then live updates.
         // The initial snapshot items produce no-op comparisons against the cache; only real
@@ -1023,6 +1058,41 @@ where
         Err(TestConnectorError::from(anyhow::anyhow!(
             "not supported by TestChainConnector"
         )))
+    }
+
+    async fn set_safe_allowance<'a>(
+        &'a self,
+        amount: HoprBalance,
+    ) -> Result<futures::future::BoxFuture<'a, Result<hopr_api::chain::ChainReceipt, Self::Error>>, Self::Error> {
+        self.faults.gate(ChainOp::SetSafeAllowance).await?;
+
+        let channels = self
+            .fetch_parsed_chain_info()
+            .await?
+            .chain_info
+            .contract_addresses
+            .channels;
+        let tx_req = self
+            .payload_gen()?
+            .approve(Address::from(<[u8; 20]>::from(channels)), amount)?;
+        let receipt = Self::send_tx(
+            &self.client,
+            tx_req,
+            self.chain_id()?,
+            &self.chain_key,
+            &self.nonce_for(&self.my_addr),
+        )
+        .await
+        .map_err(TestConnectorError::from)?;
+
+        // The simulated transaction is applied on submission, so only the confirmation fault remains.
+        let faults = self.faults.clone();
+        let in_flight = faults.enter_in_flight(ChainOp::SetSafeAllowance);
+        Ok(Box::pin(async move {
+            let _in_flight = in_flight;
+            faults.confirm(ChainOp::SetSafeAllowance).await?;
+            Ok(receipt)
+        }))
     }
 }
 
