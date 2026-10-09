@@ -245,4 +245,6 @@ hopr-api = { git = "https://github.com/hoprnet/hopr-api", branch = "q-core-1024-
   "types-internal",
   "types-with-bindings",
 ] }
-hopr-types = { git = "https://github.com/hoprnet/hopr-types", branch = "q-core-1024-jura-prod-safes-wxhopr-allowance-exhausted-all-channel", features = ["use-bindings"] }
+hopr-types = { git = "https://github.com/hoprnet/hopr-types", branch = "q-core-1024-jura-prod-safes-wxhopr-allowance-exhausted-all-channel", features = [
+  "use-bindings",
+] }
