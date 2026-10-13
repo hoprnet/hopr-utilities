@@ -645,6 +645,32 @@ mod tests {
             Ok(())
         }
 
+        /// An ERC-777 `send` with data is the same movement as a `transfer` for the ledger: the
+        /// Safe pays, the recipient is credited, and the data only concerns the recipient's hook.
+        ///
+        /// Unlike its neighbours this goes through [`TestChainConnector::send`] rather than a
+        /// hand-built payload, so it also covers the connector method the strategy calls.
+        #[tokio::test]
+        async fn safe_executed_send_with_data_debits_the_safe() -> anyhow::Result<()> {
+            use hopr_api::chain::ChainWriteAccountOperations;
+
+            let f = fixture();
+            let dest: Address = DEST.into();
+
+            // The client shares its state when cloned, so the fixture keeps seeing the chain
+            // this connector submits to.
+            let connector = create_test_blokli_connector(&f.node_key, f.client.clone(), MODULE.into()).await?;
+            connector.send(amount(), &dest, &[0xab; 70]).await?.await?;
+
+            assert_eq!(f.hopr(f.safe).await?, safe_hopr() - amount(), "the Safe must pay");
+            assert_eq!(f.hopr(dest).await?, amount(), "the destination must be credited");
+            assert!(
+                f.hopr(f.node).await?.is_zero(),
+                "the signing node holds no wxHOPR and must not have been drawn on"
+            );
+            Ok(())
+        }
+
         /// The xDai half, which needs `get_account_safe_native_balance_mut` — the token helper
         /// cannot reach a Safe's native balance.
         #[tokio::test]
