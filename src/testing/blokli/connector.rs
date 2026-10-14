@@ -522,7 +522,18 @@ where
             .map_err(TestConnectorError::from)?
             .transfer(*recipient, balance)
             .map_err(|e| TestConnectorError::from(anyhow::anyhow!("{e}")))?;
+        self.submit_as(signer, tx_req)
+    }
 
+    /// Submits `tx_req` signed by `signer`, using that signer's own nonce sequence.
+    fn submit_as<'a>(
+        &'a self,
+        signer: &hopr_api::types::crypto::prelude::ChainKeypair,
+        tx_req: hopr_api::types::chain::payload::TransactionRequest,
+    ) -> Result<
+        futures::future::BoxFuture<'a, Result<hopr_api::chain::ChainReceipt, TestConnectorError>>,
+        TestConnectorError,
+    > {
         let client = self.client.clone();
         let chain_id = self.chain_id().map_err(TestConnectorError::from)?;
         let nonce = self.nonce_for(&signer.public().to_address());
@@ -630,6 +641,20 @@ where
         recipient: &Address,
     ) -> Result<futures::future::BoxFuture<'_, Result<hopr_api::chain::ChainReceipt, Self::Error>>, Self::Error> {
         self.withdraw_as(&self.chain_key, balance, recipient)
+    }
+
+    async fn send(
+        &self,
+        balance: hopr_api::types::primitive::prelude::HoprBalance,
+        recipient: &Address,
+        data: &[u8],
+    ) -> Result<futures::future::BoxFuture<'_, Result<hopr_api::chain::ChainReceipt, Self::Error>>, Self::Error> {
+        let tx_req = self
+            .payload_gen()
+            .map_err(TestConnectorError::from)?
+            .send(*recipient, balance, data)
+            .map_err(|e| TestConnectorError::from(anyhow::anyhow!("{e}")))?;
+        self.submit_as(&self.chain_key, tx_req)
     }
 
     async fn withdraw_from_signer<Cur: hopr_api::types::primitive::prelude::Currency + Send>(

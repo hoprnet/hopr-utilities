@@ -3438,9 +3438,8 @@ dependencies = [
 
 [[package]]
 name = "hopr-api"
-version = "4.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "20b3701bf6462bff1b49a5f37d148e79b73174ae111046c65d3c723c6372f29a"
+version = "4.4.1"
+source = "git+https://github.com/0xCurvy/hopr-api.git?branch=lazar%2Fshield-router#9b321e35ead97ccc241ebfef7ba0848620d5327c"
 dependencies = [
  "async-trait",
  "atomic_enum",
@@ -3475,9 +3474,8 @@ dependencies = [
 
 [[package]]
 name = "hopr-types"
-version = "4.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9edbc7eef689f0dde57fb481404f15b671f0877dd75ff1e88c125f19a09efaf7"
+version = "4.1.1"
+source = "git+https://github.com/0xCurvy/hopr-types.git?branch=lazar%2Fshield-router#caddb9e2e3b7d0d2855351fa5ac09d808f61fa8b"
 dependencies = [
  "aes",
  "anyhow",
