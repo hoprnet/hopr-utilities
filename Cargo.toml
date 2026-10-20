@@ -160,6 +160,7 @@ tokio = { workspace = true, features = [
   "rt-multi-thread",
   "time",
 ] }
+tracing-subscriber = { workspace = true }
 
 [[bench]]
 harness           = false
@@ -238,6 +239,7 @@ tokio-util = { version = "0.7.19", default-features = false, features = [
   "compat",
 ] }
 tracing = { version = "0.1.44", features = ["release_max_level_debug"] }
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["registry", "std"] }
 
 # --- HOPR crates (crates.io) ---
 hopr-api = { version = "4.3.2", features = [
