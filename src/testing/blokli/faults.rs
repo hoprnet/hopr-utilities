@@ -202,7 +202,7 @@ impl ChainFaults {
         }
         let _ = self
             .in_flight_total
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |t| Some(t.saturating_sub(1)));
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |t| Some(t.saturating_sub(1)));
     }
 
     fn fault(&self, op: ChainOp) -> Fault {
