@@ -427,6 +427,10 @@ pub mod cpu {
     /// The closure wraps `f` with cooperative cancellation, panic catching,
     /// timing metrics, and slot tracking via guard.
     ///
+    /// The closure runs inside the tracing span that was current when the task was submitted.
+    /// Rayon threads do not inherit the caller's span, so without this, log lines from the task
+    /// would lose their context (such as the session or packet being worked on).
+    ///
     /// Note: Cooperative cancellation only prevents "queued zombies" - tasks whose
     /// receiver was dropped before execution started. If the timeout fires *after*
     /// execution begins, the task will still run to completion (counted as "orphaned").
@@ -444,6 +448,7 @@ pub mod cpu {
 
         let (tx, rx) = oneshot::channel();
         let submitted_at = std::time::Instant::now();
+        let span = tracing::Span::current();
 
         metrics::submitted();
 
@@ -451,6 +456,7 @@ pub mod cpu {
             // ensures guard is moved inside the closure, and
             // that the slot is released even on panic
             let _g = guard;
+            let _entered = span.enter();
 
             if tx.is_canceled() {
                 tracing::debug!(
