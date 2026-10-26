@@ -196,7 +196,7 @@ async-lock = "3.4.2"
 async-trait = "0.1.92"
 auto_impl = "1.4.0"
 blokli-client = "0.35.0"
-crossfire = { version = "3.1.21", default-features = false }
+crossfire = { version = "3.1.22", default-features = false }
 dashmap = "6.2.1"
 event-listener = "5.4.2"
 flume = { version = "0.12.0", default-features = false, features = ["async"] }
@@ -217,7 +217,7 @@ libp2p-identity = { version = "0.3.0", features = [
   "rand",
 ] }
 multiaddr = "0.19.1"
-parameterized = "2.0.0"
+parameterized = "2.1.0"
 pcap-file = "2.0.0"
 pin-project = "1.1.13"
 rand = { version = "0.10.3", features = ["thread_rng"] }
