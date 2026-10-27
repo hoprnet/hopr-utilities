@@ -33,6 +33,7 @@ jobs:
       id-token: write
     with:
       source_branch: ${{ github.event.pull_request.base.ref }}
+      cachix_cache_name: hopr-utils
       version_type: pr
       architecture: ${{ matrix.architecture }}
       build_file: Cargo.toml

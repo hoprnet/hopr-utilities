@@ -25,6 +25,7 @@ jobs:
       id-token: write
     with:
       source_branch: ${{ github.ref_name }}
+      cachix_cache_name: hopr-utils
       version_type: release
       architecture: x86_64-linux
       build_file: Cargo.toml
@@ -45,6 +46,7 @@ jobs:
         uses: hoprnet/hopr-workflows/actions/release-version@ade4bbd75f7204255c61d19c23f67d3da221e7d2 # release-version-v5.1.1
         with:
           source_branch: ${{ github.ref_name }}
+          cachix_cache_name: hopr-utils
           file: Cargo.toml
           release_type: ${{ inputs.release_type }}
           cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
