@@ -311,7 +311,12 @@
               type = "app";
               program = toString (
                 pkgs.writeShellScript "coverage-unit" ''
-                  nix develop .#coverage -c cargo llvm-cov --all-features --lib --lcov --output-path coverage.lcov
+                  nix develop .#coverage -c sh -c '
+                    # Match llvm-tools to rustc: the profraw format version must agree.
+                    tools="$(rustc --print sysroot)/lib/rustlib/$(rustc -vV | sed -n "s/^host: //p")/bin"
+                    export LLVM_COV="$tools/llvm-cov" LLVM_PROFDATA="$tools/llvm-profdata"
+                    cargo llvm-cov --all-features --lib --lcov --output-path coverage.lcov
+                  '
                 ''
               );
             };
