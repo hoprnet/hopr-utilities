@@ -53,3 +53,6 @@ jobs:
           zulip_channel: hopr-utilities
           zulip_topic: Releases
           github_app_private_key: ${{ secrets.GH_APP_HOPRNET_BOT_PRIVATE_KEY }}
+        env:
+          # The bump commit runs the pre-commit hook that `nix develop` installs, but the checkout has no config
+          PRE_COMMIT_ALLOW_NO_CONFIG: "1"

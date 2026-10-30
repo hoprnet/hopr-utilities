@@ -11,7 +11,7 @@ name         = "hopr-utilities"
 readme       = "README.md"
 repository   = "https://github.com/hoprnet/hopr-utilities"
 rust-version = "1.97"
-version      = "0.18.0"
+version      = "0.18.1"
 
 [lints.rust]
 # `tokio_unstable` gates the cooperative-yield (`tokio::task::coop`) code paths; declare it so the
@@ -211,12 +211,12 @@ hickory-resolver = { version = "0.26.3", default-features = false, features = [
 indexmap = "2.14.2"
 lazy_static = "1.5.1"
 libc = "0.2.191"
-libp2p-identity = { version = "0.3.0", features = [
+libp2p-identity = { version = "0.2.14", features = [
   "ed25519",
   "peerid",
   "rand",
 ] }
-multiaddr = "0.19.1"
+multiaddr = "0.18.2"
 parameterized = "2.0.0"
 pcap-file = "2.0.0"
 pin-project = "1.1.13"
