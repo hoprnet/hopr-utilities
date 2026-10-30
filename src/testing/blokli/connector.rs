@@ -643,16 +643,16 @@ where
         self.withdraw_as(&self.chain_key, balance, recipient)
     }
 
-    async fn send(
+    async fn send_erc777(
         &self,
         balance: hopr_api::types::primitive::prelude::HoprBalance,
         recipient: &Address,
-        data: &[u8],
+        payload: &hopr_api::types::chain::prelude::Erc777Payload,
     ) -> Result<futures::future::BoxFuture<'_, Result<hopr_api::chain::ChainReceipt, Self::Error>>, Self::Error> {
         let tx_req = self
             .payload_gen()
             .map_err(TestConnectorError::from)?
-            .send(*recipient, balance, data)
+            .send_erc777(*recipient, balance, payload)
             .map_err(|e| TestConnectorError::from(anyhow::anyhow!("{e}")))?;
         self.submit_as(&self.chain_key, tx_req)
     }
