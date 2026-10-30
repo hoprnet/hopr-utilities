@@ -218,6 +218,23 @@ impl BlokliTestStateMutator for FullStateEmulator {
                     }
                 }
             }
+            ParsedHoprChainAction::Approve(spender, amount, payer) => {
+                // The emulator tracks one allowance: the Safe's allowance towards the channels contract, which
+                // `FundChannel` spends. An approval sets it to the absolute amount; any other spender or payer has no
+                // state to update.
+                if *payer == Payer::Safe && spender.as_ref() == AsRef::<[u8]>::as_ref(&addresses.channels) {
+                    let safe_allowance = state.get_account_safe_allowance_mut(&sender.into()).ok_or(
+                        blokli_client::errors::ErrorKind::MockClientError(anyhow::anyhow!(
+                            "missing safe allowance for {sender}"
+                        )),
+                    )?;
+                    safe_allowance.allowance = blokli_client::api::types::TokenValueString(amount.to_string());
+
+                    tracing::debug!(%sender, %spender, %amount, "safe allowance set");
+                } else {
+                    tracing::debug!(%sender, ?payer, %spender, %amount, "approval not tracked by the emulator");
+                }
+            }
             ParsedHoprChainAction::FundChannel(dst_addr, stake) => {
                 let source = state.get_account(&sender.into()).cloned().ok_or(
                     blokli_client::errors::ErrorKind::MockClientError(anyhow::anyhow!("missing account for {sender}")),
