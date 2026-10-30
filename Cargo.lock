@@ -3439,7 +3439,7 @@ dependencies = [
 [[package]]
 name = "hopr-api"
 version = "4.4.1"
-source = "git+https://github.com/0xCurvy/hopr-api.git?branch=lazar%2Fshield-router#9b321e35ead97ccc241ebfef7ba0848620d5327c"
+source = "git+https://github.com/0xCurvy/hopr-api.git?branch=lazar%2Fshield-router#296b4ca763e4226098e2c273c95f149ebe5e81a6"
 dependencies = [
  "async-trait",
  "atomic_enum",
@@ -3475,7 +3475,7 @@ dependencies = [
 [[package]]
 name = "hopr-types"
 version = "4.1.1"
-source = "git+https://github.com/0xCurvy/hopr-types.git?branch=lazar%2Fshield-router#caddb9e2e3b7d0d2855351fa5ac09d808f61fa8b"
+source = "git+https://github.com/0xCurvy/hopr-types.git?branch=lazar%2Fshield-router#13eb853c4afac7cc357d2c9d45411fe3d04bc6c4"
 dependencies = [
  "aes",
  "anyhow",
