@@ -34,6 +34,12 @@
       "commitMessageTopic": "Cargo dependencies"
     },
     {
+      "description": "Keep multiaddr and libp2p-identity on the versions the older libp2p pins; a newer pair clashes with the Multiaddr and PeerId types of crates that use that libp2p",
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["multiaddr", "libp2p-identity"],
+      "enabled": false
+    },
+    {
       "description": "Expedite cargo security updates \u2014 bypass weekly schedule",
       "matchManagers": ["cargo"],
       "matchCategories": ["security"],
