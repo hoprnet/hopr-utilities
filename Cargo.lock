@@ -1604,9 +1604,9 @@ dependencies = [
 
 [[package]]
 name = "blokli-client"
-version = "0.36.1"
+version = "0.37.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e840b803920fa924e9b45ec5cbea1fc09d445aad73d87c727e55ad31e774df04"
+checksum = "b0316ef1a89d3d089b8534c12fa77403702dbbbef24a64361f74f4b5ec7e2edd"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -1630,6 +1630,7 @@ dependencies = [
  "serde_json",
  "smart-default",
  "thiserror 2.0.21",
+ "tokio",
  "tracing",
  "url",
 ]
@@ -3608,7 +3609,7 @@ dependencies = [
 
 [[package]]
 name = "hopr-utilities"
-version = "0.18.2"
+version = "0.19.0"
 dependencies = [
  "anyhow",
  "arrayvec",
