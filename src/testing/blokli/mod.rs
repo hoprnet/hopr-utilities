@@ -1,11 +1,18 @@
+mod connector;
 mod emulator;
+mod faults;
 
-use blokli_client::BlokliTestStateMutator;
-pub use blokli_client::{BlokliTestClient, BlokliTestState, exports::Entry};
+pub use blokli_client::{
+    BlokliTestClient, BlokliTestState, BlokliTestStateMutator, BlokliTestStateSnapshot, exports::Entry,
+};
+pub use connector::{
+    NoopKeyMapper, TestChainConnector, TestConnectorError, create_test_blokli_connector, register_test_safe,
+};
 pub use emulator::{ChainMutator, FullStateEmulator, StaticState};
+pub use faults::{ChainFaults, ChainOp, EventKind, Fault, InFlightGuard};
 pub use hopr_api::chain::ChainInfo;
 use hopr_api::{
-    chain::DeployedSafe,
+    chain::{DeployedSafe, ServiceEntry, ServiceRegistryConfig, ServiceType, ServiceTypeConfig},
     types::{
         chain::{ParsedHoprChainAction, contract_addresses_for_network},
         crypto::{
@@ -21,13 +28,54 @@ use hopr_api::{
 #[derive(Clone)]
 pub struct BlokliTestStateBuilder(BlokliTestState);
 
+const GVPN_EXIT_REGISTRATION_BURN: &str = "1000000000000000000000 wei wxHOPR";
+const GVPN_EXIT_UPDATE_BURN: &str = "100000000000000000000 wei wxHOPR";
+const SERVICE_TYPE_REGISTRATION_FEE: &str = "1000000000000000000 wei wxHOPR";
+const DEFAULT_ALLOWANCE: u128 = 10_000_000_000_000_u128;
+
 impl Default for BlokliTestStateBuilder {
     fn default() -> Self {
-        Self(BlokliTestState::default()).with_hopr_network_chain_info("anvil-localhost")
+        let (_, addresses) = contract_addresses_for_network("anvil-localhost").expect("network name not found");
+
+        Self(BlokliTestState::default())
+            .with_hopr_network_chain_info("anvil-localhost")
+            .with_service_types([(
+                ServiceType::GVPN_EXIT,
+                ServiceTypeConfig {
+                    owner: Some(
+                        "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+                            .parse()
+                            .expect("default anvil deployer address must be valid"),
+                    ),
+                    requirement: None,
+                    registration_burn: GVPN_EXIT_REGISTRATION_BURN
+                        .parse()
+                        .expect("default registration burn must be valid"),
+                    update_burn: GVPN_EXIT_UPDATE_BURN
+                        .parse()
+                        .expect("default update burn must be valid"),
+                },
+            )])
+            .with_service_registry_config(ServiceRegistryConfig {
+                type_registration_fee: SERVICE_TYPE_REGISTRATION_FEE
+                    .parse()
+                    .expect("default service type registration fee must be valid"),
+                node_safe_registry: Address::new(addresses.node_safe_registry.as_slice()),
+            })
     }
 }
 
-const DEFAULT_ALLOWANCE: u128 = 10_000_000_000_000_u128;
+/// Converts a timestamp into the unsigned Unix seconds represented by the Blokli API.
+///
+/// Panics for a timestamp before the Unix epoch.
+fn unix_seconds(time: std::time::SystemTime) -> blokli_client::api::types::Uint64 {
+    blokli_client::api::types::Uint64(
+        time.duration_since(std::time::UNIX_EPOCH)
+            .expect("timestamp must not precede the Unix epoch")
+            .as_secs()
+            .to_string(),
+    )
+}
 
 impl From<BlokliTestState> for BlokliTestStateBuilder {
     fn from(state: BlokliTestState) -> Self {
@@ -174,6 +222,72 @@ impl BlokliTestStateBuilder {
                 },
             )
         }));
+        self
+    }
+
+    /// Appends the initial [`ServiceEntries`](ServiceEntry) of the on-chain service registry to the state.
+    ///
+    /// The service type of each entry is rendered the way Blokli renders it: the ASCII name of the type, or
+    /// `0x`-prefixed hex for a type that does not follow that convention.
+    #[must_use]
+    pub fn with_services<I: IntoIterator<Item = ServiceEntry>>(mut self, services: I) -> Self {
+        for service in services {
+            let service_type = service.service_type.to_string();
+            match self
+                .0
+                .services
+                .entry(BlokliTestState::service_entry_key(&service_type, &service.node.into()))
+            {
+                Entry::Occupied(_) => panic!(
+                    "duplicate service entry for service type {service_type} of node {}",
+                    service.node
+                ),
+                Entry::Vacant(v) => {
+                    v.insert(blokli_client::api::types::ServiceEntry {
+                        service_type,
+                        node: const_hex::encode(service.node),
+                        safe: const_hex::encode(service.safe),
+                        metadata: format!("0x{}", const_hex::encode(&service.metadata)),
+                        registered_at: unix_seconds(service.registered_at),
+                        updated_at: unix_seconds(service.updated_at),
+                    });
+                }
+            }
+        }
+        self
+    }
+
+    /// Appends the initial [`ServiceTypeConfigs`](ServiceTypeConfig) of the on-chain service registry to the state.
+    #[must_use]
+    pub fn with_service_types<I: IntoIterator<Item = (ServiceType, ServiceTypeConfig)>>(
+        mut self,
+        service_types: I,
+    ) -> Self {
+        for (service_type, config) in service_types {
+            let service_type = service_type.to_string();
+            match self.0.service_types.entry(service_type.clone()) {
+                Entry::Occupied(_) => panic!("duplicate service type {service_type}"),
+                Entry::Vacant(v) => {
+                    v.insert(blokli_client::api::types::ServiceTypeInfo {
+                        service_type,
+                        owner: config.owner.map(const_hex::encode),
+                        requirement: config.requirement.map(const_hex::encode),
+                        registration_burn: config.registration_burn.to_string(),
+                        update_burn: config.update_burn.to_string(),
+                    });
+                }
+            }
+        }
+        self
+    }
+
+    /// Sets the initial registry-wide service configuration.
+    #[must_use]
+    pub fn with_service_registry_config(mut self, config: ServiceRegistryConfig) -> Self {
+        self.0.service_registry_config = blokli_client::api::types::ServiceRegistryConfig {
+            type_registration_fee: config.type_registration_fee.to_string(),
+            node_safe_registry: const_hex::encode(config.node_safe_registry),
+        };
         self
     }
 
@@ -365,5 +479,229 @@ impl BlokliTestStateBuilder {
         let (sender, receiver) = futures::channel::mpsc::unbounded();
         let client = BlokliTestClient::new(self.0, FullStateEmulator(module_address, Some(sender)));
         (client, receiver)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_state_matches_the_deployed_gvpn_exit_type() {
+        let state = BlokliTestStateBuilder::default().build();
+        let service_type = state
+            .get_service_type(&ServiceType::GVPN_EXIT.as_encoded())
+            .expect("gvpn:exit must be registered by default");
+
+        assert_eq!(service_type.service_type, "gvpn:exit");
+        assert_eq!(
+            service_type.owner.as_deref(),
+            Some("f39fd6e51aad88f6f4ce6ab8827279cfffb92266")
+        );
+        assert_eq!(service_type.requirement, None);
+        assert_eq!(service_type.registration_burn, "1000 wxHOPR");
+        assert_eq!(service_type.update_burn, "100 wxHOPR");
+        assert_eq!(state.service_registry_config.type_registration_fee, "1 wxHOPR");
+        assert!(state.services.is_empty());
+    }
+
+    /// Withdrawal attribution in [`FullStateEmulator`].
+    ///
+    /// A `SafePayloadGenerator` transfer is signed by the node key but executed by the Safe through
+    /// `execTransactionFromModule`, so the *Safe's* balance moves. A `BasicPayloadGenerator`
+    /// transfer of the same amount, to the same destination, signed by the same key, moves the
+    /// node's own. Nothing in the decoded action distinguishes them except the payer, which is what
+    /// these tests pin down.
+    mod withdrawal_payer {
+        use blokli_client::api::{BlokliQueryClient, BlokliTransactionClient, types::Token};
+        use hopr_api::types::{
+            chain::{
+                ContractAddresses,
+                payload::{BasicPayloadGenerator, PayloadGenerator, SafePayloadGenerator, SignableTransaction},
+            },
+            crypto::prelude::ChainKeypair,
+        };
+
+        use super::*;
+
+        const NETWORK: &str = "piz-palu-staging";
+        const MODULE: [u8; Address::SIZE] = [0x11u8; Address::SIZE];
+        const DEST: [u8; Address::SIZE] = [0xdeu8; Address::SIZE];
+
+        /// Enough to cover `EMULATED_TX_PRICE`, which the emulator charges the *signer* whichever
+        /// account ends up paying the value.
+        fn node_gas() -> XDaiBalance {
+            XDaiBalance::new_base(1)
+        }
+
+        fn safe_hopr() -> HoprBalance {
+            HoprBalance::new_base(1000)
+        }
+
+        fn safe_xdai() -> XDaiBalance {
+            XDaiBalance::new_base(500)
+        }
+
+        fn amount() -> HoprBalance {
+            HoprBalance::new_base(40)
+        }
+
+        struct Fixture {
+            client: BlokliTestClient<FullStateEmulator>,
+            node_key: ChainKeypair,
+            node: Address,
+            safe: Address,
+        }
+
+        /// A node whose Safe is a *different* account, so the two can be told apart. The node holds
+        /// only gas; the Safe holds the wxHOPR and the xDai being moved.
+        fn fixture() -> Fixture {
+            let node_key = ChainKeypair::random();
+            let node = node_key.public().to_address();
+            let safe: Address = [0x5au8; Address::SIZE].into();
+            let dest: Address = DEST.into();
+
+            let client = BlokliTestStateBuilder::default()
+                .with_hopr_network_chain_info(NETWORK)
+                .with_accounts([(
+                    AccountEntry {
+                        public_key: *OffchainKeypair::random().public(),
+                        chain_addr: node,
+                        entry_type: AccountType::NotAnnounced,
+                        safe_address: Some(safe),
+                        key_id: 0u32.into(),
+                    },
+                    safe_hopr(),
+                    node_gas(),
+                )])
+                // `with_accounts` leaves the Safe with no xDai, which is the shape of a real
+                // deployment. The native case needs some to move.
+                .with_balances([(safe, safe_xdai())])
+                // Both entries must exist up front or the balance queries fail outright.
+                .with_balances([(dest, HoprBalance::zero())])
+                .with_balances([(dest, XDaiBalance::zero())])
+                .build_dynamic_client(MODULE.into());
+
+            Fixture {
+                client,
+                node_key,
+                node,
+                safe,
+            }
+        }
+
+        impl Fixture {
+            async fn hopr(&self, address: Address) -> anyhow::Result<HoprBalance> {
+                Ok(self
+                    .client
+                    .query_token_balance(&address.into(), Token::WxHOPR)
+                    .await?
+                    .balance
+                    .0
+                    .parse()?)
+            }
+
+            async fn xdai(&self, address: Address) -> anyhow::Result<XDaiBalance> {
+                Ok(self
+                    .client
+                    .query_native_balance(&address.into())
+                    .await?
+                    .balance
+                    .0
+                    .parse()?)
+            }
+
+            async fn submit(&self, signed: &[u8]) -> anyhow::Result<()> {
+                self.client.submit_and_confirm_transaction(signed, 1).await?;
+                Ok(())
+            }
+
+            fn contracts(&self) -> ContractAddresses {
+                contract_addresses_for_network(NETWORK)
+                    .expect("network name not found")
+                    .1
+            }
+        }
+
+        /// The regression test for the defect: a Safe-executed token transfer must come out of the
+        /// Safe. Before the payer was carried, this debited the node and silently passed.
+        #[tokio::test]
+        async fn safe_executed_token_withdrawal_debits_the_safe() -> anyhow::Result<()> {
+            let f = fixture();
+            let dest: Address = DEST.into();
+
+            let signed = SafePayloadGenerator::new(&f.node_key, f.contracts(), MODULE.into())
+                .transfer(dest, amount())?
+                .sign_and_encode_to_eip2718(0, 1, None, &f.node_key)
+                .await?;
+            f.submit(&signed).await?;
+
+            assert_eq!(f.hopr(f.safe).await?, safe_hopr() - amount(), "the Safe must pay");
+            assert_eq!(f.hopr(dest).await?, amount(), "the destination must be credited");
+            assert!(
+                f.hopr(f.node).await?.is_zero(),
+                "the signing node holds no wxHOPR and must not have been drawn on"
+            );
+            Ok(())
+        }
+
+        /// The xDai half, which needs `get_account_safe_native_balance_mut` — the token helper
+        /// cannot reach a Safe's native balance.
+        #[tokio::test]
+        async fn safe_executed_native_withdrawal_debits_the_safe() -> anyhow::Result<()> {
+            let f = fixture();
+            let dest: Address = DEST.into();
+            let moved = XDaiBalance::new_base(7);
+
+            let signed = SafePayloadGenerator::new(&f.node_key, f.contracts(), MODULE.into())
+                .transfer(dest, moved)?
+                .sign_and_encode_to_eip2718(0, 1, None, &f.node_key)
+                .await?;
+            f.submit(&signed).await?;
+
+            assert_eq!(f.xdai(f.safe).await?, safe_xdai() - moved, "the Safe must pay");
+            assert_eq!(f.xdai(dest).await?, moved, "the destination must be credited");
+            assert!(
+                f.xdai(f.node).await? < node_gas(),
+                "the signer still pays the transaction fee out of its own xDai"
+            );
+            Ok(())
+        }
+
+        /// The control: same signer, same destination, same amount — only the generator differs, so
+        /// only the payer differs. Without this the two tests above would also pass if every
+        /// withdrawal were attributed to the Safe.
+        #[tokio::test]
+        async fn eoa_withdrawal_debits_the_signer_not_the_safe() -> anyhow::Result<()> {
+            let f = fixture();
+            let dest: Address = DEST.into();
+            // `with_accounts` gives the node no wxHOPR, so credit it directly: this transfer is
+            // the node's own to pay for.
+            let funded = HoprBalance::new_base(100);
+            f.client.hidden_state_update(|state| {
+                state.token_balances.insert(
+                    const_hex::encode(f.node),
+                    blokli_client::api::types::HoprBalance {
+                        __typename: "HoprBalance".to_string(),
+                        balance: blokli_client::api::types::TokenValueString(funded.to_string()),
+                    },
+                );
+            });
+
+            let signed = BasicPayloadGenerator::new(f.node, f.contracts())
+                .transfer(dest, amount())?
+                .sign_and_encode_to_eip2718(0, 1, None, &f.node_key)
+                .await?;
+            f.submit(&signed).await?;
+
+            assert_eq!(f.hopr(f.node).await?, funded - amount(), "the signer must pay");
+            assert_eq!(f.hopr(dest).await?, amount(), "the destination must be credited");
+            assert_eq!(
+                f.hopr(f.safe).await?,
+                safe_hopr(),
+                "the Safe must be untouched by an EOA transfer"
+            );
+            Ok(())
+        }
     }
 }

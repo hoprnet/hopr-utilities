@@ -5,6 +5,7 @@ pub mod moving;
 pub use moving::{
     exponential::ExponentialMovingAverage,
     simple::{NoSumSMA, SMA, SingleSumSMA},
+    windowed::WindowedRatio,
 };
 
 #[cfg(feature = "statistics-types-weighted")]

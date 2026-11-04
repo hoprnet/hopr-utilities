@@ -2,7 +2,7 @@ use std::{ops::Add, str::FromStr};
 
 use blokli_client::{BlokliTestState, BlokliTestStateMutator, api::types::RedeemedStats};
 use hopr_api::types::{
-    chain::{ContractAddresses, ParsedHoprChainAction},
+    chain::{ContractAddresses, ParsedHoprChainAction, Payer},
     internal::channels::generate_channel_id,
     primitive::{
         balance::{HoprBalance, XDaiBalance},
@@ -61,7 +61,8 @@ impl BlokliTestStateMutator for FullStateEmulator {
                 blokli_client::errors::ErrorKind::MockClientError(anyhow::anyhow!("failed to parse contract addresses"))
             })?;
 
-        let (action, sender) = ParsedHoprChainAction::parse_from_eip2718(signed_tx, &self.0, &addresses)
+        let module_address = Address::new(self.0.as_ref());
+        let (action, sender) = ParsedHoprChainAction::parse_from_eip2718(signed_tx, &module_address, &addresses)
             .map_err(|e| blokli_client::errors::ErrorKind::MockClientError(e.into()))?;
         tracing::debug!(%sender, ?action, "parsed action from signed transaction");
 
@@ -122,22 +123,27 @@ impl BlokliTestStateMutator for FullStateEmulator {
                     tracing::debug!(%sender, %packet_key, ?multiaddress, "node announced");
                 }
             }
-            ParsedHoprChainAction::WithdrawNative(destination, amount) => {
-                let balance = state.native_balances.get_mut(&const_hex::encode(sender)).ok_or(
-                    blokli_client::errors::ErrorKind::MockClientError(anyhow::anyhow!(
-                        "missing native balance for {sender}"
-                    )),
-                )?;
+            ParsedHoprChainAction::WithdrawNative(destination, amount, payer) => {
+                // `Payer::Safe` means the transaction was executed through the Safe's module: the
+                // node key signed it, but the value moves out of the Safe. The signer still pays
+                // the transaction fee, which is charged separately at the end.
+                let balance = match payer {
+                    Payer::Eoa => state.native_balances.get_mut(&const_hex::encode(sender)),
+                    Payer::Safe => state.get_account_safe_native_balance_mut(&sender.into()),
+                }
+                .ok_or(blokli_client::errors::ErrorKind::MockClientError(anyhow::anyhow!(
+                    "missing native balance for the {payer:?} payer of {sender}"
+                )))?;
 
                 let balance_num = balance.balance.0.parse::<XDaiBalance>().map_err(|_| {
                     blokli_client::errors::ErrorKind::MockClientError(anyhow::anyhow!(
-                        "failed to parse token balance for {sender}"
+                        "failed to parse native balance for the {payer:?} payer of {sender}"
                     ))
                 })?;
 
                 if &balance_num < amount {
                     return Err(blokli_client::errors::ErrorKind::MockClientError(anyhow::anyhow!(
-                        "balance {balance_num} for {sender} is lower than amount {amount}"
+                        "balance {balance_num} of the {payer:?} payer of {sender} is lower than amount {amount}"
                     ))
                     .into());
                 }
@@ -154,33 +160,37 @@ impl BlokliTestStateMutator for FullStateEmulator {
                         dst_balance.get_mut().balance =
                             blokli_client::api::types::TokenValueString(new_balance.to_string());
 
-                        tracing::debug!(%sender, %amount, %destination, "xdai withdrawn to an existing account");
+                        tracing::debug!(%sender, ?payer, %amount, %destination, "xdai withdrawn to an existing account");
                     }
                     Entry::Vacant(new_balance) => {
                         new_balance.insert(blokli_client::api::types::NativeBalance {
                             __typename: "NativeBalance".into(),
                             balance: blokli_client::api::types::TokenValueString(amount.to_string()),
                         });
-                        tracing::debug!(%sender, %amount, %destination, "xdai withdrawn to a new account");
+                        tracing::debug!(%sender, ?payer, %amount, %destination, "xdai withdrawn to a new account");
                     }
                 }
             }
-            ParsedHoprChainAction::WithdrawToken(destination, amount) => {
-                let balance = state.token_balances.get_mut(&const_hex::encode(sender)).ok_or(
-                    blokli_client::errors::ErrorKind::MockClientError(anyhow::anyhow!(
-                        "missing token balance for {sender}"
-                    )),
-                )?;
+            ParsedHoprChainAction::WithdrawToken(destination, amount, payer) => {
+                // See `WithdrawNative` above: a Safe-executed transfer debits the Safe, not the key
+                // that signed it.
+                let balance = match payer {
+                    Payer::Eoa => state.token_balances.get_mut(&const_hex::encode(sender)),
+                    Payer::Safe => state.get_account_safe_token_balance_mut(&sender.into()),
+                }
+                .ok_or(blokli_client::errors::ErrorKind::MockClientError(anyhow::anyhow!(
+                    "missing token balance for the {payer:?} payer of {sender}"
+                )))?;
 
                 let balance_num = balance.balance.0.parse::<HoprBalance>().map_err(|_| {
                     blokli_client::errors::ErrorKind::MockClientError(anyhow::anyhow!(
-                        "failed to parse token balance for {sender}"
+                        "failed to parse token balance for the {payer:?} payer of {sender}"
                     ))
                 })?;
 
                 if &balance_num < amount {
                     return Err(blokli_client::errors::ErrorKind::MockClientError(anyhow::anyhow!(
-                        "balance {balance_num} for {sender} is lower than amount {amount}"
+                        "balance {balance_num} of the {payer:?} payer of {sender} is lower than amount {amount}"
                     ))
                     .into());
                 }
@@ -197,15 +207,32 @@ impl BlokliTestStateMutator for FullStateEmulator {
                         dst_balance.get_mut().balance =
                             blokli_client::api::types::TokenValueString(new_balance.to_string());
 
-                        tracing::debug!(%sender, %amount, %destination, "wxhopr withdrawn to an existing account");
+                        tracing::debug!(%sender, ?payer, %amount, %destination, "wxhopr withdrawn to an existing account");
                     }
                     Entry::Vacant(new_balance) => {
                         new_balance.insert(blokli_client::api::types::HoprBalance {
                             __typename: "HoprBalance".into(),
                             balance: blokli_client::api::types::TokenValueString(amount.to_string()),
                         });
-                        tracing::debug!(%sender, %amount, %destination, "wxhopr withdrawn to a new account");
+                        tracing::debug!(%sender, ?payer, %amount, %destination, "wxhopr withdrawn to a new account");
                     }
+                }
+            }
+            ParsedHoprChainAction::Approve(spender, amount, payer) => {
+                // The emulator tracks one allowance: the Safe's allowance towards the channels contract, which
+                // `FundChannel` spends. An approval sets it to the absolute amount; any other spender or payer has no
+                // state to update.
+                if *payer == Payer::Safe && spender.as_ref() == AsRef::<[u8]>::as_ref(&addresses.channels) {
+                    let safe_allowance = state.get_account_safe_allowance_mut(&sender.into()).ok_or(
+                        blokli_client::errors::ErrorKind::MockClientError(anyhow::anyhow!(
+                            "missing safe allowance for {sender}"
+                        )),
+                    )?;
+                    safe_allowance.allowance = blokli_client::api::types::TokenValueString(amount.to_string());
+
+                    tracing::debug!(%sender, %spender, %amount, "safe allowance set");
+                } else {
+                    tracing::debug!(%sender, ?payer, %spender, %amount, "approval not tracked by the emulator");
                 }
             }
             ParsedHoprChainAction::FundChannel(dst_addr, stake) => {

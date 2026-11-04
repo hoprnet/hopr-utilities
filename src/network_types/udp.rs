@@ -745,6 +745,69 @@ mod tests {
         Ok(())
     }
 
+    /// Validates the ingress-queue bound behind the exit relay's `HOPR_UDP_DATAGRAM_QUEUE_SIZE = 256`
+    /// (vs the original 8192): under a flood into a stalled (never-read) stream, once the bounded
+    /// flume channel is full the receiver blocks and the kernel drops the overflow, so only about
+    /// `queue_size + kernel_socket_buffer` datagrams survive. The kernel term is the same on both
+    /// runs, so the difference tracks the queue sizes — a 256-slot queue retains far fewer than an
+    /// 8192-slot one, which is what bounds the relay's worst-case buffered delay (~1 s vs ~40 s).
+    /// See hoprnet#8421.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn bounded_ingress_queue_caps_buffered_datagrams_under_flood() -> anyhow::Result<()> {
+        // Near WG-MTU datagrams so the kernel SO_RCVBUF holds relatively few and the channel bound
+        // dominates; flood well past 8192 + a typical SO_RCVBUF so both queue sizes saturate.
+        const DATAGRAM: usize = 1400;
+        const FLOOD: usize = 12_000;
+
+        async fn retained_after_flood(queue_size: usize) -> anyhow::Result<usize> {
+            let mut stream = ConnectedUdpStream::builder()
+                .with_buffer_size(2048)
+                .with_queue_size(queue_size)
+                .with_foreign_data_mode(ForeignDataMode::Accept)
+                .build(("127.0.0.1", 0))
+                .context("build stream")?;
+            let addr = *stream.bound_address();
+
+            let sender = UdpSocket::bind("127.0.0.1:0").await.context("bind sender")?;
+            let payload = vec![0u8; DATAGRAM];
+            for _ in 0..FLOOD {
+                // Ignore send errors: under overload the local send path itself may drop.
+                let _ = sender.send_to(&payload, addr).await;
+            }
+
+            // Let the receiver fill the bounded channel; the kernel drops the overflow.
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+            // Drain (one datagram per read) until nothing arrives within a short window.
+            let mut buf = vec![0u8; 2048];
+            let mut retained = 0usize;
+            while let Ok(Ok(n)) =
+                tokio::time::timeout(std::time::Duration::from_millis(100), stream.read(&mut buf)).await
+            {
+                if n == 0 {
+                    break;
+                }
+                retained += 1;
+            }
+            Ok(retained)
+        }
+
+        let bounded = retained_after_flood(256).await?;
+        let original = retained_after_flood(8192).await?;
+
+        assert!(
+            bounded < FLOOD,
+            "the 256-slot queue must drop under sustained flood (bounded delay, then loss); retained {bounded} of \
+             {FLOOD}"
+        );
+        assert!(
+            original > bounded + 4000,
+            "the 8192-slot queue must retain far more than the 256-slot one (kernel buffer cancels): 256 -> \
+             {bounded}, 8192 -> {original}"
+        );
+        Ok(())
+    }
+
     #[tokio::test]
     async fn udp_stream_should_process_sequential_writes() -> anyhow::Result<()> {
         const BUF_SIZE: usize = 1024;
