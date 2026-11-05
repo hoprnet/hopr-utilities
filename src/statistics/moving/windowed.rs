@@ -68,7 +68,7 @@ impl<const BUCKETS: usize> WindowedRatio<BUCKETS> {
     /// Records that `count` events are expected to be observed later.
     ///
     /// A record whose slice has already been overwritten by a newer one is dropped; see
-    /// [`Self::bucket_at`].
+    /// `Self::bucket_at`.
     pub fn record_expected(&mut self, count: u64, now: Instant) {
         if let Some(bucket) = self.bucket_at(now) {
             bucket.expected = bucket.expected.saturating_add(count);
@@ -78,7 +78,7 @@ impl<const BUCKETS: usize> WindowedRatio<BUCKETS> {
     /// Records that `count` expected events were observed.
     ///
     /// A record whose slice has already been overwritten by a newer one is dropped; see
-    /// [`Self::bucket_at`].
+    /// `Self::bucket_at`.
     pub fn record_observed(&mut self, count: u64, now: Instant) {
         if let Some(bucket) = self.bucket_at(now) {
             bucket.observed = bucket.observed.saturating_add(count);
