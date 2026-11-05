@@ -106,7 +106,7 @@ jobs:
               - "src/**"
               - "tests/**"
               - "benches/**"
-            - "build.rs"
+              - "build.rs"
               - "Cargo.toml"
               - "Cargo.lock"
               - "rust-toolchain.toml"
