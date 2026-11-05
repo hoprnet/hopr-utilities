@@ -140,9 +140,10 @@ jobs:
     secrets:
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
   # ── Shared tests (unit) ─────────────────────────────────────────────────────
+  # Stage 2: tests run only after the checks (stage 1) are green.
   tests:
     name: Test
-    needs: changes
+    needs: [changes, checks]
     uses: hoprnet/hopr-workflows/.github/workflows/tests.yaml@3ee95c480962bb3c1fc0061887da9ba735f537c7 # workflow-tests-v6.1.1
     permissions:
       contents: read
@@ -158,9 +159,12 @@ jobs:
     secrets:
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
   # ── Build: library ─────────────────────────────────────────────────────────
+  # Stage 3: builds run only after checks and tests are green. When `tests`
+  # is skipped (no Rust change) the build is input-skipped too, so no
+  # `!failure()` tolerance is needed.
   build-library:
     name: Library ${{ matrix.architecture }}
-    needs: changes
+    needs: [changes, checks, tests]
     strategy:
       fail-fast: false
       matrix:
