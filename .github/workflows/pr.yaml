@@ -113,6 +113,7 @@ jobs:
               - "rust-toolchain.toml"
               - "rustfmt.toml"
               - "justfile"
+              - "deny.toml"
               - ".cargo/**"
               - "flake.nix"
               - "flake.lock"
@@ -129,7 +130,8 @@ jobs:
     uses: hoprnet/hopr-workflows/.github/workflows/checks.yaml@3ee95c480962bb3c1fc0061887da9ba735f537c7 # workflow-checks-v2.1.1
     with:
       source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
-      lint_command: "nix develop --command just quick"
+      # Also builds the nix doc, deny (deny.toml) and test-doc checks.
+      lint_command: "nix develop --command just quick && nix build -L .#doc .#deny .#test-doc"
       audit_command: "nix run -L .#audit"
       deps: true
       # Format and pre-commit cover every file type and always run.
@@ -159,6 +161,22 @@ jobs:
     secrets:
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
   # ── Build: library ─────────────────────────────────────────────────────────
+  # PR-only: compares the public API with the last published release.
+  semver-checks:
+    name: Semver
+    needs: [changes, checks]
+    if: github.event_name == 'pull_request' && needs.changes.outputs.rust == 'true'
+    runs-on: depot-ubuntu-24.04-4
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Check semver
+        uses: hoprnet/hopr-workflows/actions/nix-action@ff4c0b7afc400ee6cf217841dc576f8a1289bcc0 # nix-action-v1.2.1
+        with:
+          source_branch: ${{ github.event.pull_request.head.sha }}
+          cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          command: "nix run -L .#semver-checks"
   # Stage 3: builds run only after checks and tests are green. When `tests`
   # is skipped (no Rust change) the build is input-skipped too, so no
   # `!failure()` tolerance is needed.
@@ -209,6 +227,7 @@ jobs:
       - changes
       - checks
       - tests
+      - semver-checks
       - build-library
     runs-on: depot-ubuntu-24.04-2
     permissions: {}
@@ -217,10 +236,11 @@ jobs:
         uses: re-actors/alls-green@b5b5b37504aa4183270bd3d855c52a67f212be35 # v1.3.0
         with:
           jobs: ${{ toJSON(needs) }}
-          # validate-pr-title and label run on pull_request only. `tests` and
+          # validate-pr-title and label run on pull_request only. semver-checks
+          # runs on pull_request only and skips a non-Rust change. `tests` and
           # `build-library` are input-gated on `changes.outputs.rust`; when every
           # inner job of the reusable workflow skips, the caller job reports
           # skipped as well. So their skip is allowed only for a non-Rust
           # change; a Rust change still has to run both. A failed job reds the
           # gate either way.
-          allowed-skips: ${{ needs.changes.outputs.rust == 'true' && 'validate-pr-title, label' || 'validate-pr-title, label, tests, build-library' }}
+          allowed-skips: ${{ needs.changes.outputs.rust == 'true' && (github.event_name == 'pull_request' && 'validate-pr-title, label' || 'validate-pr-title, label, semver-checks') || 'validate-pr-title, label, semver-checks, tests, build-library' }}
