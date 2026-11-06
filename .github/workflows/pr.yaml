@@ -196,18 +196,15 @@ jobs:
           - architecture: aarch64-darwin
             runner: depot-macos-15
             required_label: "binary:aarch64-darwin"
-    uses: hoprnet/hopr-workflows/.github/workflows/build-library.yaml@bfdfd56e110ee356595faac1424b74906ed50ac9 # build-library-v3.3.2
+    uses: hoprnet/hopr-workflows/.github/workflows/build-library.yaml@45221eb1aadfc5c46751306c5c7d6d291c8a24b3 # build-library-v3.1.2
     permissions:
       contents: read
       id-token: write
     with:
-      # A branch name, not a SHA: cargo release rejects a detached HEAD.
       source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
       version_type: commit
       architecture: ${{ matrix.architecture }}
       build_file: Cargo.toml
-      # Cached crane build; cargo release then skips its own rebuild (--no-verify).
-      build_command: "nix build -L .#lib-hopr-utilities-${{ matrix.architecture }}"
       package_name: hopr-utilities
       runner: ${{ matrix.runner }}
       enabled: ${{ needs.changes.outputs.rust == 'true' && (matrix.required_label == '' || contains(github.event.pull_request.labels.*.name, matrix.required_label)) }}
