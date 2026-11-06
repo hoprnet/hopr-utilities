@@ -18,7 +18,7 @@
     nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixos-unstable";
 
     # HOPR Nix Library (provides flake-utils and reusable build functions)
-    nix-lib.url = "github:hoprnet/nix-lib/main";
+    nix-lib.url = "github:hoprnet/nix-lib/v2.1.1";
 
     # Rust build system
     crane.url = "github:ipetkov/crane";
@@ -27,6 +27,7 @@
     # Development tools and quality assurance
     pre-commit.url = "github:cachix/git-hooks.nix";
     flake-root.url = "github:srid/flake-root";
+    treefmt-nix.url = "github:numtide/treefmt-nix";
 
     # Input dependency optimization
     flake-parts.inputs.nixpkgs-lib.follows = "nixpkgs";
@@ -34,7 +35,15 @@
     nix-lib.inputs.nixpkgs.follows = "nixpkgs";
     nix-lib.inputs.crane.follows = "crane";
     nix-lib.inputs.rust-overlay.follows = "rust-overlay";
+    # One unstable/treefmt/flake-parts revision for the whole flake. Left
+    # unfollowed, `nix flake update nix-lib` moves nix-lib's private
+    # nixpkgs-unstable, which supplies cargo-llvm-cov for the coverage shell,
+    # to a revision missing from the binary cache.
+    nix-lib.inputs.nixpkgs-unstable.follows = "nixpkgs-unstable";
+    nix-lib.inputs.treefmt-nix.follows = "treefmt-nix";
+    nix-lib.inputs.flake-parts.follows = "flake-parts";
     rust-overlay.inputs.nixpkgs.follows = "nixpkgs";
+    treefmt-nix.inputs.nixpkgs.follows = "nixpkgs";
   };
 
   outputs =
@@ -147,6 +156,9 @@
           utilityApps = {
             update-github-labels = nixLib.mkUpdateGithubLabelsApp;
             audit = nixLib.mkAuditApp { };
+            semver-checks = (nixLib.mkSemverChecksApp { rustToolchain = stableToolchain; }) // {
+              meta.description = "Check the public API against the last published release";
+            };
             check = nixLib.mkCheckApp { inherit system; };
             test = {
               type = "app";
@@ -311,11 +323,12 @@
               type = "app";
               program = toString (
                 pkgs.writeShellScript "coverage-unit" ''
+                  export PATH="${pkgs.cargo-nextest}/bin:$PATH"
                   nix develop .#coverage -c sh -c '
                     # Match llvm-tools to rustc: the profraw format version must agree.
                     tools="$(rustc --print sysroot)/lib/rustlib/$(rustc -vV | sed -n "s/^host: //p")/bin"
                     export LLVM_COV="$tools/llvm-cov" LLVM_PROFDATA="$tools/llvm-profdata"
-                    cargo llvm-cov --all-features --lib --lcov --output-path coverage.lcov
+                    cargo llvm-cov nextest --all-features --no-fail-fast --lcov --output-path coverage.lcov
                   '
                 ''
               );

@@ -58,5 +58,35 @@ in
       runClippy = true;
     }
   );
+
+  doc = builders.local.callPackage nixLib.mkRustLibrary (
+    localArgs
+    // {
+      runDoc = true;
+      cargoExtraArgs = "--all-features";
+    }
+  );
+
+  deny = builders.local.callPackage nixLib.mkRustLibrary (
+    localArgs
+    // {
+      runDeny = true;
+    }
+  );
+
+  # nextest does not run doctests; the coverage app runs nextest.
+  test-doc =
+    (builders.local.callPackage nixLib.mkRustLibrary (
+      localArgs
+      // {
+        runTests = true;
+        cargoExtraArgs = "--all-features";
+      }
+    )).overrideAttrs
+      (_: {
+        checkPhase = ''
+          cargo test --doc --all-features
+        '';
+      });
 }
 // hoprUtilitiesPlatformPackages

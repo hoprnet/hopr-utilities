@@ -410,7 +410,7 @@ pub mod cpu {
     }
 
     /// Like [`spawn_fifo_blocking`] but also tracks the task in [`DECODE_OUTSTANDING`] and yields a
-    /// fair-share pool slot to encode first when the pool is saturated (see [`arbitration`]).
+    /// fair-share pool slot to encode first when the pool is saturated (see `arbitration`).
     pub async fn spawn_decode_blocking<R: Send + 'static>(
         f: impl FnOnce() -> R + Send + 'static,
         operation: &'static str,
