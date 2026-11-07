@@ -28,6 +28,68 @@ pub mod prelude {
         task::{JoinError, JoinHandle, consume_budget, spawn, spawn_blocking, spawn_local, yield_now},
         time::{sleep, timeout as timeout_fut},
     };
+
+    pub use super::semaphore::{Semaphore, SemaphoreGuard};
+}
+
+/// Counting semaphore with one API across both runtime features.
+///
+/// The lock types above re-export directly because both crates expose the same `lock().await`; the
+/// semaphores cannot. `async_lock::Semaphore::acquire` returns the guard, while
+/// `tokio::sync::Semaphore::acquire` returns `Result<_, AcquireError>`. This normalises both.
+#[cfg(any(feature = "async-lock", feature = "runtime-tokio"))]
+pub mod semaphore {
+    #[cfg(feature = "async-lock")]
+    type Impl = async_lock::Semaphore;
+    #[cfg(feature = "async-lock")]
+    type GuardImpl<'a> = async_lock::SemaphoreGuard<'a>;
+
+    #[cfg(all(feature = "runtime-tokio", not(feature = "async-lock")))]
+    type Impl = tokio::sync::Semaphore;
+    #[cfg(all(feature = "runtime-tokio", not(feature = "async-lock")))]
+    type GuardImpl<'a> = tokio::sync::SemaphorePermit<'a>;
+
+    /// A counting semaphore. Permits return on [`SemaphoreGuard`] drop.
+    #[derive(Debug)]
+    pub struct Semaphore(Impl);
+
+    /// A held permit. Releases on drop.
+    ///
+    /// The inner guard is only ever held, never read: its `Drop` is what returns the permit.
+    #[derive(Debug)]
+    pub struct SemaphoreGuard<'a>(#[expect(dead_code, reason = "held only for its Drop")] GuardImpl<'a>);
+
+    impl Semaphore {
+        /// Creates a semaphore with `permits` available.
+        pub fn new(permits: usize) -> Self {
+            Self(Impl::new(permits))
+        }
+
+        /// Waits until a permit is available and takes it.
+        ///
+        /// A closed tokio semaphore is not reachable here, since nothing in HOPR closes one.
+        pub async fn acquire(&self) -> SemaphoreGuard<'_> {
+            #[cfg(feature = "async-lock")]
+            let guard = self.0.acquire().await;
+            #[cfg(all(feature = "runtime-tokio", not(feature = "async-lock")))]
+            let guard = self.0.acquire().await.expect("a HOPR semaphore is never closed");
+            SemaphoreGuard(guard)
+        }
+
+        /// Takes a permit if one is available, without waiting.
+        pub fn try_acquire(&self) -> Option<SemaphoreGuard<'_>> {
+            #[cfg(feature = "async-lock")]
+            let guard = self.0.try_acquire();
+            #[cfg(all(feature = "runtime-tokio", not(feature = "async-lock")))]
+            let guard = self.0.try_acquire().ok();
+            guard.map(SemaphoreGuard)
+        }
+
+        /// Adds `n` permits to the semaphore.
+        pub fn add_permits(&self, n: usize) {
+            self.0.add_permits(n)
+        }
+    }
 }
 
 /// Passive diagnostics for attributing high-frequency async polling.
