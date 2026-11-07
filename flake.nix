@@ -81,6 +81,7 @@
           pkgs = import nixpkgs {
             inherit system overlays;
           };
+          pkgsUnstable = import nixpkgs-unstable { inherit system; };
 
           # Platform information
           buildPlatform = pkgs.stdenv.buildPlatform;
@@ -221,7 +222,8 @@
               gh
               cargo-insta
               cargo-machete
-              cargo-release
+              # From unstable: cargo-release 1.1.7 needs rustc 1.97, release-26.05 ships 1.95.
+              pkgsUnstable.cargo-release
               cargo-shear
               yq
             ];
@@ -250,7 +252,7 @@
               treefmtPrograms = pkgs.lib.attrValues config.treefmt.build.programs;
               extraPackages = with pkgs; [
                 cargo-machete
-                cargo-release
+                pkgsUnstable.cargo-release
                 cargo-shear
                 zizmor
               ];
