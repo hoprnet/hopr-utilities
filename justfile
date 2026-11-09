@@ -11,7 +11,7 @@ default:
 # ============================================================================
 
 # Quick check - format, clippy, and check
-quick: fmt clippy check
+quick: fmt clippy check check-features
 
 # Development build and test cycle - format, check, and test
 dev: fmt check test
@@ -35,6 +35,15 @@ build-release:
 # Check code without building binaries
 check:
     cargo check --all-features
+
+# Check the feature matrix. `--all-features` alone hides both of these:
+# - `--no-default-features` catches a re-export not gated on the module behind it;
+# - the isolated `runtime-tokio` arm is the one downstream users build, but `async-lock`
+#   wins whenever both are on, so `--all-features` never compiles it.
+check-features:
+    cargo check --lib --no-default-features
+    cargo check --lib --no-default-features --features runtime-tokio
+    cargo check --lib --no-default-features --features async-lock
 
 # Clean all build artifacts
 clean:
