@@ -245,9 +245,9 @@ tracing-subscriber = { version = "0.3.23", default-features = false, features = 
 ] }
 
 # --- HOPR crates (crates.io) ---
-hopr-api = { version = "5.0.0", features = [
+hopr-api = { version = "6.0.0", features = [
   "node",
   "types-internal",
   "types-with-bindings",
 ] }
-hopr-types = { version = "5.0.0", features = ["use-bindings"] }
+hopr-types = { version = "6.0.0", features = ["use-bindings"] }

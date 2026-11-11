@@ -645,6 +645,45 @@ mod tests {
             Ok(())
         }
 
+        /// An ERC-777 `send` with data is the same movement as a `transfer` for the ledger: the
+        /// Safe pays, the recipient is credited, and the data only concerns the recipient's hook.
+        ///
+        /// Unlike its neighbours this goes through [`TestChainConnector::send_erc777`] rather
+        /// than a hand-built payload, so it also covers the connector method the strategy calls.
+        #[tokio::test]
+        async fn safe_executed_send_with_data_debits_the_safe() -> anyhow::Result<()> {
+            use hopr_api::{
+                chain::ChainWriteAccountOperations,
+                types::chain::prelude::{CurvyErc777Payload, CurvyNote, Erc777Payload},
+            };
+
+            let f = fixture();
+            let dest: Address = DEST.into();
+            let payload = Erc777Payload::Curvy(CurvyErc777Payload::DirectShield {
+                aggregator: [0xcc; 20].into(),
+                note: CurvyNote {
+                    owner_hash: 1.into(),
+                    token: 2.into(),
+                    amount: 1000.into(),
+                    ephemeral_key: [4.into(), 5.into()],
+                    view_tag: 6,
+                },
+            });
+
+            // The client shares its state when cloned, so the fixture keeps seeing the chain
+            // this connector submits to.
+            let connector = create_test_blokli_connector(&f.node_key, f.client.clone(), MODULE.into()).await?;
+            connector.send_erc777(amount(), &dest, &payload).await?.await?;
+
+            assert_eq!(f.hopr(f.safe).await?, safe_hopr() - amount(), "the Safe must pay");
+            assert_eq!(f.hopr(dest).await?, amount(), "the destination must be credited");
+            assert!(
+                f.hopr(f.node).await?.is_zero(),
+                "the signing node holds no wxHOPR and must not have been drawn on"
+            );
+            Ok(())
+        }
+
         /// The xDai half, which needs `get_account_safe_native_balance_mut` — the token helper
         /// cannot reach a Safe's native balance.
         #[tokio::test]
@@ -669,7 +708,7 @@ mod tests {
         }
 
         /// The control: same signer, same destination, same amount — only the generator differs, so
-        /// only the payer differs. Without this the two tests above would also pass if every
+        /// only the payer differs. Without this the Safe-executed tests above would also pass if every
         /// withdrawal were attributed to the Safe.
         #[tokio::test]
         async fn eoa_withdrawal_debits_the_signer_not_the_safe() -> anyhow::Result<()> {
