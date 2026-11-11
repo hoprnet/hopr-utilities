@@ -652,8 +652,10 @@ mod tests {
         /// than a hand-built payload, so it also covers the connector method the strategy calls.
         #[tokio::test]
         async fn safe_executed_send_with_data_debits_the_safe() -> anyhow::Result<()> {
-            use hopr_api::chain::ChainWriteAccountOperations;
-            use hopr_api::types::chain::prelude::{CurvyErc777Payload, CurvyNote, Erc777Payload};
+            use hopr_api::{
+                chain::ChainWriteAccountOperations,
+                types::chain::prelude::{CurvyErc777Payload, CurvyNote, Erc777Payload},
+            };
 
             let f = fixture();
             let dest: Address = DEST.into();
