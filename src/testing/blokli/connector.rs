@@ -641,6 +641,30 @@ where
         self.withdraw_as(signer, balance, recipient)
     }
 
+    async fn send_erc777(
+        &self,
+        balance: HoprBalance,
+        recipient: &Address,
+        payload: &hopr_api::types::chain::prelude::Erc777Payload,
+    ) -> Result<futures::future::BoxFuture<'_, Result<hopr_api::chain::ChainReceipt, Self::Error>>, Self::Error> {
+        let tx_req = self
+            .payload_gen()
+            .map_err(TestConnectorError::from)?
+            .send_erc777(*recipient, balance, payload)
+            .map_err(|e| TestConnectorError::from(anyhow::anyhow!("{e}")))?;
+
+        let client = self.client.clone();
+        let chain_id = self.chain_id().map_err(TestConnectorError::from)?;
+        let nonce = self.nonce_for(&self.chain_key.public().to_address());
+        let signer = self.chain_key.clone();
+
+        Ok(Box::pin(async move {
+            Self::send_tx(&client, tx_req, chain_id, &signer, &nonce)
+                .await
+                .map_err(TestConnectorError::from)
+        }))
+    }
+
     async fn register_safe(
         &self,
         safe_address: &Address,
