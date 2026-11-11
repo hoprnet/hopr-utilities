@@ -28,6 +28,109 @@ pub mod prelude {
         task::{JoinError, JoinHandle, consume_budget, spawn, spawn_blocking, spawn_local, yield_now},
         time::{sleep, timeout as timeout_fut},
     };
+
+    #[cfg(any(feature = "async-lock", feature = "runtime-tokio"))]
+    pub use super::semaphore::{Semaphore, SemaphoreGuard};
+}
+
+/// Counting semaphore with one API across both runtime features.
+///
+/// The lock types above re-export directly because both crates expose the same `lock().await`; the
+/// semaphores cannot. `async_lock::Semaphore::acquire` returns the guard, while
+/// `tokio::sync::Semaphore::acquire` returns `Result<_, AcquireError>`. This normalises both.
+#[cfg(any(feature = "async-lock", feature = "runtime-tokio"))]
+pub mod semaphore {
+    #[cfg(feature = "async-lock")]
+    type Impl = async_lock::Semaphore;
+    #[cfg(feature = "async-lock")]
+    type GuardImpl<'a> = async_lock::SemaphoreGuard<'a>;
+
+    #[cfg(all(feature = "runtime-tokio", not(feature = "async-lock")))]
+    type Impl = tokio::sync::Semaphore;
+    #[cfg(all(feature = "runtime-tokio", not(feature = "async-lock")))]
+    type GuardImpl<'a> = tokio::sync::SemaphorePermit<'a>;
+
+    /// A counting semaphore. Permits return on [`SemaphoreGuard`] drop.
+    ///
+    /// Permits are handed out in FIFO order by both backings; do not rely on it beyond that, as it
+    /// is documented by `tokio` and incidental in `async-lock`. The tokio backing caps the total at
+    /// `usize::MAX >> 3` and panics past it — no HOPR caller is anywhere near that.
+    #[derive(Debug)]
+    pub struct Semaphore(Impl);
+
+    /// A held permit. Releases on drop.
+    ///
+    /// The inner guard is only ever held, never read: its `Drop` is what returns the permit.
+    #[derive(Debug)]
+    pub struct SemaphoreGuard<'a>(#[expect(dead_code, reason = "held only for its Drop")] GuardImpl<'a>);
+
+    impl Semaphore {
+        /// Creates a semaphore with `permits` available.
+        pub fn new(permits: usize) -> Self {
+            Self(Impl::new(permits))
+        }
+
+        /// Waits until a permit is available and takes it.
+        ///
+        /// Never fails: the wrapper exposes no `close`, so a closed semaphore is unreachable.
+        pub async fn acquire(&self) -> SemaphoreGuard<'_> {
+            #[cfg(feature = "async-lock")]
+            let guard = self.0.acquire().await;
+            #[cfg(all(feature = "runtime-tokio", not(feature = "async-lock")))]
+            let guard = self.0.acquire().await.expect("a HOPR semaphore is never closed");
+            SemaphoreGuard(guard)
+        }
+
+        /// Takes a permit if one is available, without waiting.
+        pub fn try_acquire(&self) -> Option<SemaphoreGuard<'_>> {
+            #[cfg(feature = "async-lock")]
+            let guard = self.0.try_acquire();
+            #[cfg(all(feature = "runtime-tokio", not(feature = "async-lock")))]
+            let guard = self.0.try_acquire().ok();
+            guard.map(SemaphoreGuard)
+        }
+
+        /// Adds `n` permits to the semaphore.
+        pub fn add_permits(&self, n: usize) {
+            self.0.add_permits(n)
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn try_acquire_succeeds_up_to_the_permit_count() {
+            let sem = Semaphore::new(2);
+            let a = sem.try_acquire().expect("first permit must be free");
+            let b = sem.try_acquire().expect("second permit must be free");
+            assert!(sem.try_acquire().is_none(), "a third permit must not be handed out");
+
+            drop(a);
+            assert!(sem.try_acquire().is_some(), "dropping a guard returns its permit");
+            drop(b);
+        }
+
+        /// `tokio` is an unconditional dev-dependency, so both arms can be driven by an executor —
+        /// which is what exercises `async_lock`'s `acquire().await` as well as tokio's.
+        #[cfg(any(feature = "async-lock", feature = "runtime-tokio"))]
+        #[tokio::test]
+        async fn add_permits_releases_a_waiter() {
+            let sem = std::sync::Arc::new(Semaphore::new(0));
+            assert!(
+                sem.try_acquire().is_none(),
+                "a zero-permit semaphore has nothing to give"
+            );
+
+            // `acquire` borrows the semaphore, so the permit is added from a concurrent task that
+            // does not hold the borrow.
+            let adder = sem.clone();
+            let task = tokio::spawn(async move { adder.add_permits(1) });
+            let _guard = sem.acquire().await;
+            task.await.expect("the adder task must not panic");
+        }
+    }
 }
 
 /// Passive diagnostics for attributing high-frequency async polling.
