@@ -20,12 +20,12 @@ concurrency:
 jobs:
   build-library:
     name: Build Library
-    uses: hoprnet/hopr-workflows/.github/workflows/build-library.yaml@45221eb1aadfc5c46751306c5c7d6d291c8a24b3 # build-library-v3.1.2
+    uses: hoprnet/hopr-workflows/.github/workflows/build-library.yaml@43c833e72dffe4f2f3be60193733e5657f8aa0d7 # build-library-v4.0.0
     permissions:
       contents: read
       id-token: write
     with:
-      source_branch: ${{ github.ref_name }}
+      repo_sha: ${{ github.sha }}
       version_type: release
       architecture: x86_64-linux
       build_file: Cargo.toml
