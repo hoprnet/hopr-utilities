@@ -192,10 +192,10 @@ anyhow = "1.0.104"
 arrayvec = "0.7.8"
 assertables = "10.1.0"
 async-broadcast = "0.7.2"
-async-lock = "3.4.2"
+async-lock = "3.5.0"
 async-trait = "0.1.92"
 auto_impl = "1.4.0"
-blokli-client = "0.37.0"
+blokli-client = "0.37.1"
 crossfire = { version = "3.1.22", default-features = false }
 dashmap = "6.2.1"
 event-listener = "5.4.2"
@@ -220,7 +220,7 @@ multiaddr = "0.18.2"
 parameterized = "2.0.0"
 pcap-file = "2.0.0"
 pin-project = "1.1.13"
-rand = { version = "0.10.3", features = ["thread_rng"] }
+rand = { version = "0.10.4", features = ["thread_rng"] }
 rayon = "1.12.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_bytes = "0.11.19"
@@ -245,9 +245,9 @@ tracing-subscriber = { version = "0.3.23", default-features = false, features = 
 ] }
 
 # --- HOPR crates (crates.io) ---
-hopr-api = { version = "6.0.0", features = [
+hopr-api = { version = "6.1.0", features = [
   "node",
   "types-internal",
   "types-with-bindings",
 ] }
-hopr-types = { version = "6.0.0", features = ["use-bindings"] }
+hopr-types = { version = "6.0.1", features = ["use-bindings"] }
