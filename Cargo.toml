@@ -195,7 +195,7 @@ async-broadcast = "0.7.2"
 async-lock = "3.4.2"
 async-trait = "0.1.92"
 auto_impl = "1.4.0"
-blokli-client = "0.37.0"
+blokli-client = "0.38.0"
 crossfire = { version = "3.1.22", default-features = false }
 dashmap = "6.2.1"
 event-listener = "5.4.2"
@@ -251,3 +251,7 @@ hopr-api = { version = "6.0.0", features = [
   "types-with-bindings",
 ] }
 hopr-types = { version = "6.0.0", features = ["use-bindings"] }
+
+# Temporary: unreleased blokli-client 0.38.0 (#42, #83, #87). Replace with the released version.
+[patch.crates-io]
+blokli-client = { git = "https://github.com/hoprnet/blokli-client", branch = "agent/86-unmined-diagnosis" }

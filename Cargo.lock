@@ -1604,9 +1604,8 @@ dependencies = [
 
 [[package]]
 name = "blokli-client"
-version = "0.37.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0316ef1a89d3d089b8534c12fa77403702dbbbef24a64361f74f4b5ec7e2edd"
+version = "0.38.0"
+source = "git+https://github.com/hoprnet/blokli-client?branch=agent%2F86-unmined-diagnosis#652a092701501607ae17707251b5dcba2184ca15"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -1629,6 +1628,7 @@ dependencies = [
  "serde",
  "serde_json",
  "smart-default",
+ "strum",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
@@ -2487,7 +2487,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c54e03a951783e8b327515db3f2a2fd0e3bed362a96b066f341ce66ed49b4ead"
 dependencies = [
  "data-encoding",
- "syn 1.0.109",
+ "syn 3.0.9",
 ]
 
 [[package]]
