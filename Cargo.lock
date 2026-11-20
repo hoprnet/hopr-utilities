@@ -1605,7 +1605,8 @@ dependencies = [
 [[package]]
 name = "blokli-client"
 version = "0.38.0"
-source = "git+https://github.com/hoprnet/blokli-client?branch=agent%2F86-unmined-diagnosis#652a092701501607ae17707251b5dcba2184ca15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9c8b0be9b290271b659bda763f72f2dc05b5c70ddecf93ae6ac1a3ca92a61bb4"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -3661,7 +3662,7 @@ dependencies = [
 
 [[package]]
 name = "hopr-utilities"
-version = "0.20.1"
+version = "0.21.0"
 dependencies = [
  "anyhow",
  "arrayvec",
