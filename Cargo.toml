@@ -218,7 +218,7 @@ libp2p-identity = { version = "0.2.14", features = [
 ] }
 multiaddr = "0.18.2"
 parameterized = "2.0.0"
-pcap-file = "2.0.0"
+pcap-file = "3.0.0"
 pin-project = "1.1.13"
 rand = { version = "0.10.3", features = ["thread_rng"] }
 rayon = "1.12.0"
