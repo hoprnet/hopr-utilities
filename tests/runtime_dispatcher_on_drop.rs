@@ -19,7 +19,7 @@ use tracing_subscriber::{
     Layer, filter::LevelFilter, layer::SubscriberExt, registry::LookupSpan, util::SubscriberInitExt,
 };
 
-/// Panics on any thread whose message is the tracing-subscriber "no such span" panic.
+/// Counts panics on any thread whose message contains the tracing-subscriber "no such span" panic.
 static SPAN_PANICS: AtomicUsize = AtomicUsize::new(0);
 /// The tests share one global subscriber and one panic hook, so they run one at a time.
 static SERIAL: Mutex<()> = Mutex::new(());
