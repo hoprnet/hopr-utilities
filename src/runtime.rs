@@ -684,6 +684,51 @@ impl<T> Drop for AbortableList<T> {
     }
 }
 
+/// Runs a future under the dispatcher that was current when it was created, while it is polled and
+/// while it is dropped.
+///
+/// `tracing::instrument::WithDispatch` installs its dispatcher only while the future is polled. A
+/// spawned task can be dropped by the executor outside of a poll, under the worker thread's default
+/// dispatcher. A span's parent may then be released through a different subscriber.
+///
+/// Only the wrapped future is covered. Spans moved into other spawned tasks, or returned in the
+/// output, are released wherever those are dropped.
+#[cfg(feature = "runtime-tokio")]
+pub struct WithDispatchOnDrop<F> {
+    dispatch: tracing::Dispatch,
+    inner: Option<Pin<Box<F>>>,
+}
+
+#[cfg(feature = "runtime-tokio")]
+impl<F> WithDispatchOnDrop<F> {
+    /// Wraps `inner` with the dispatcher that is current on the calling thread.
+    pub fn new(inner: F) -> Self {
+        Self {
+            dispatch: tracing::dispatcher::get_default(tracing::Dispatch::clone),
+            inner: Some(Box::pin(inner)),
+        }
+    }
+}
+
+#[cfg(feature = "runtime-tokio")]
+impl<F: Future> Future for WithDispatchOnDrop<F> {
+    type Output = F::Output;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = &mut *self;
+        let inner = this.inner.as_mut().expect("inner future is only taken on drop");
+        tracing::dispatcher::with_default(&this.dispatch, || inner.as_mut().poll(cx))
+    }
+}
+
+#[cfg(feature = "runtime-tokio")]
+impl<F> Drop for WithDispatchOnDrop<F> {
+    fn drop(&mut self) {
+        let inner = self.inner.take();
+        tracing::dispatcher::with_default(&self.dispatch, move || drop(inner));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{
