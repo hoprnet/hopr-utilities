@@ -430,11 +430,12 @@ pub mod cpu {
     /// The closure runs inside the tracing span that was current when the task was submitted.
     /// Rayon threads do not inherit the caller's span, so without this, log lines from the task
     /// would lose their context (such as the session or packet being worked on).
+    /// The job also runs under the submitting thread's dispatcher so events and span closes reach its subscriber.
     ///
     /// Note: Cooperative cancellation only prevents "queued zombies" - tasks whose
     /// receiver was dropped before execution started. If the timeout fires *after*
     /// execution begins, the task will still run to completion (counted as "orphaned").
-    fn cancellable_task<R: Send + 'static>(
+    pub(super) fn cancellable_task<R: Send + 'static>(
         f: impl FnOnce() -> R + Send + 'static,
         operation: &'static str,
     ) -> Result<
@@ -449,42 +450,54 @@ pub mod cpu {
         let (tx, rx) = oneshot::channel();
         let submitted_at = std::time::Instant::now();
         let span = tracing::Span::current();
+        // Closing a span can release its parent through the pool thread's default dispatcher.
+        // Keep that dispatcher the same as the one that owns the captured span.
+        let dispatch = tracing::dispatcher::get_default(tracing::Dispatch::clone);
 
         metrics::submitted();
 
         let task = move || {
-            // ensures guard is moved inside the closure, and
-            // that the slot is released even on panic
-            let _g = guard;
-            let _entered = span.enter();
+            // Catch panics in the job's guards and span, outside the catch around `f`.
+            let job = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                tracing::dispatcher::with_default(&dispatch, move || {
+                    // ensures guard is moved inside the closure, and
+                    // that the slot is released even on panic
+                    let _g = guard;
+                    let _entered = span.enter();
 
-            if tx.is_canceled() {
-                tracing::debug!(
-                    queue_wait_ms = submitted_at.elapsed().as_millis() as u64,
-                    "skipping cancelled task (receiver dropped before execution)"
-                );
-                metrics::cancelled();
-                return;
-            }
+                    if tx.is_canceled() {
+                        tracing::debug!(
+                            queue_wait_ms = submitted_at.elapsed().as_millis() as u64,
+                            "skipping cancelled task (receiver dropped before execution)"
+                        );
+                        metrics::cancelled();
+                        return;
+                    }
 
-            let wait_duration = submitted_at.elapsed();
-            metrics::observe_queue_wait(wait_duration.as_secs_f64());
+                    let wait_duration = submitted_at.elapsed();
+                    metrics::observe_queue_wait(wait_duration.as_secs_f64());
 
-            // Mark this task as occupying a pool thread for the duration of `f` (drops after it).
-            let _running = arbitration::RunningGuard::enter();
-            let execution_start = std::time::Instant::now();
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
-            metrics::observe_execution(operation, execution_start.elapsed().as_secs_f64());
+                    // Mark this task as occupying a pool thread for the duration of `f` (drops after it).
+                    let _running = arbitration::RunningGuard::enter();
+                    let execution_start = std::time::Instant::now();
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+                    metrics::observe_execution(operation, execution_start.elapsed().as_secs_f64());
 
-            match tx.send(result) {
-                Ok(()) => metrics::completed(),
-                Err(_) => {
-                    tracing::debug!(
-                        queue_wait_ms = wait_duration.as_millis() as u64,
-                        "receiver dropped during execution, result discarded"
-                    );
-                    metrics::orphaned();
-                }
+                    match tx.send(result) {
+                        Ok(()) => metrics::completed(),
+                        Err(_) => {
+                            tracing::debug!(
+                                queue_wait_ms = wait_duration.as_millis() as u64,
+                                "receiver dropped during execution, result discarded"
+                            );
+                            metrics::orphaned();
+                        }
+                    }
+                });
+            }));
+            if job.is_err() {
+                // Avoid re-entering the submitting subscriber, which may have caused the panic.
+                tracing::error!(operation, "pool job panicked outside its task body");
             }
         };
 
@@ -551,6 +564,33 @@ mod tests {
     use serial_test::serial;
 
     use super::cpu;
+
+    #[cfg(panic = "unwind")]
+    #[test]
+    #[serial]
+    fn a_panic_after_the_task_body_does_not_abort() {
+        struct PanicOnDrop;
+        impl Drop for PanicOnDrop {
+            fn drop(&mut self) {
+                panic!("dropped");
+            }
+        }
+
+        // Dropping the receiver during `f` makes the job drop its result after `f` returns.
+        let slot = Arc::new(std::sync::Mutex::new(None));
+        let rx_slot = slot.clone();
+        let (task, rx) = cpu::cancellable_task(
+            move || {
+                drop(rx_slot.lock().unwrap().take());
+                PanicOnDrop
+            },
+            "test",
+        )
+        .expect("a slot must be free");
+        *slot.lock().unwrap() = Some(rx);
+
+        task();
+    }
 
     #[tokio::test]
     #[serial]
