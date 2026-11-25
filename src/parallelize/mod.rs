@@ -430,6 +430,7 @@ pub mod cpu {
     /// The closure runs inside the tracing span that was current when the task was submitted.
     /// Rayon threads do not inherit the caller's span, so without this, log lines from the task
     /// would lose their context (such as the session or packet being worked on).
+    /// The job also runs under the submitting thread's dispatcher so events and span closes reach its subscriber.
     ///
     /// Note: Cooperative cancellation only prevents "queued zombies" - tasks whose
     /// receiver was dropped before execution started. If the timeout fires *after*
@@ -449,43 +450,48 @@ pub mod cpu {
         let (tx, rx) = oneshot::channel();
         let submitted_at = std::time::Instant::now();
         let span = tracing::Span::current();
+        // Closing a span can release its parent through the pool thread's default dispatcher.
+        // Keep that dispatcher the same as the one that owns the captured span.
+        let dispatch = tracing::dispatcher::get_default(tracing::Dispatch::clone);
 
         metrics::submitted();
 
         let task = move || {
-            // ensures guard is moved inside the closure, and
-            // that the slot is released even on panic
-            let _g = guard;
-            let _entered = span.enter();
+            tracing::dispatcher::with_default(&dispatch, move || {
+                // ensures guard is moved inside the closure, and
+                // that the slot is released even on panic
+                let _g = guard;
+                let _entered = span.enter();
 
-            if tx.is_canceled() {
-                tracing::debug!(
-                    queue_wait_ms = submitted_at.elapsed().as_millis() as u64,
-                    "skipping cancelled task (receiver dropped before execution)"
-                );
-                metrics::cancelled();
-                return;
-            }
-
-            let wait_duration = submitted_at.elapsed();
-            metrics::observe_queue_wait(wait_duration.as_secs_f64());
-
-            // Mark this task as occupying a pool thread for the duration of `f` (drops after it).
-            let _running = arbitration::RunningGuard::enter();
-            let execution_start = std::time::Instant::now();
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
-            metrics::observe_execution(operation, execution_start.elapsed().as_secs_f64());
-
-            match tx.send(result) {
-                Ok(()) => metrics::completed(),
-                Err(_) => {
+                if tx.is_canceled() {
                     tracing::debug!(
-                        queue_wait_ms = wait_duration.as_millis() as u64,
-                        "receiver dropped during execution, result discarded"
+                        queue_wait_ms = submitted_at.elapsed().as_millis() as u64,
+                        "skipping cancelled task (receiver dropped before execution)"
                     );
-                    metrics::orphaned();
+                    metrics::cancelled();
+                    return;
                 }
-            }
+
+                let wait_duration = submitted_at.elapsed();
+                metrics::observe_queue_wait(wait_duration.as_secs_f64());
+
+                // Mark this task as occupying a pool thread for the duration of `f` (drops after it).
+                let _running = arbitration::RunningGuard::enter();
+                let execution_start = std::time::Instant::now();
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+                metrics::observe_execution(operation, execution_start.elapsed().as_secs_f64());
+
+                match tx.send(result) {
+                    Ok(()) => metrics::completed(),
+                    Err(_) => {
+                        tracing::debug!(
+                            queue_wait_ms = wait_duration.as_millis() as u64,
+                            "receiver dropped during execution, result discarded"
+                        );
+                        metrics::orphaned();
+                    }
+                }
+            });
         };
 
         Ok((task, rx))
