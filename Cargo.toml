@@ -162,6 +162,10 @@ tokio = { workspace = true, features = [
 ] }
 tracing-subscriber = { workspace = true }
 
+[[test]]
+name              = "parallelize_span_dispatcher"
+required-features = ["parallelize-rayon"]
+
 [[bench]]
 harness           = false
 name              = "pool_arbiter_bench"
